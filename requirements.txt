@@ -1,5 +1,0 @@
-# Production dependencies for rocket-sim
-# Install with: pip install -r requirements.txt
-
-matplotlib>=3.7.0
-numpy>=1.24.0

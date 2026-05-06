@@ -176,7 +176,9 @@ class Rocket:
         Update rocket state for a time step.
 
         Computes acceleration from thrust and gravity, then updates
-        velocity and position using simple Euler integration.
+        velocity and position using symplectic Euler (Euler-Cromer)
+        integration, which conserves energy better than the plain
+        Euler method for orbital trajectories.
 
         Args:
             dt: Time step in seconds.
@@ -197,7 +199,7 @@ class Rocket:
             # Coasting: only gravity
             acceleration = -gravity
 
-        # Euler integration
+        # Symplectic Euler: update velocity first, then position with new velocity
         self.velocity += acceleration * dt
         self.altitude += self.velocity * dt
         self.time += dt

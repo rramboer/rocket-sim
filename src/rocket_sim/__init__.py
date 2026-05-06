@@ -17,7 +17,7 @@ from rocket_sim.simulation import (
 )
 from rocket_sim.visualization import PlotOptions, PlotStyle, Plotter
 
-__version__ = "1.0.0"
+__version__ = "0.1.0"
 __author__ = "Ryan R"
 __all__ = [
     # Core classes

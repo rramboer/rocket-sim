@@ -252,7 +252,7 @@ class RocketSimulation:
                     result.flight_time = self.rocket.time
                     logger.info(
                         f"Escape velocity achieved at t={self.rocket.time:.2f}s, "
-                        f"alt={state.altitude/1000:.2f}km"
+                        f"alt={state.altitude / 1000:.2f}km"
                     )
                     break
 
