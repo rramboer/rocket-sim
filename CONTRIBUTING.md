@@ -47,9 +47,8 @@ Feature suggestions are welcome! Please open an issue with:
    ```
 8. **Ensure code quality**:
    ```bash
-   black src tests
-   isort src tests
-   ruff check src tests
+   ruff check --fix src tests
+   ruff format src tests
    mypy src
    ```
 9. **Commit** with a clear message:
@@ -108,20 +107,19 @@ pytest -k "test_gravity"
 
 This project uses:
 
-- **Black** for code formatting
-- **isort** for import sorting
-- **Ruff** for linting
+- **Ruff** for linting and formatting (replaces black, isort, flake8, pyupgrade)
 - **mypy** for type checking
 
 All of these run automatically via pre-commit hooks, but you can also run them manually:
 
 ```bash
-# Format code
-black src tests
-isort src tests
+# Lint and auto-fix
+ruff check --fix src tests
 
-# Check for issues
-ruff check src tests
+# Format
+ruff format src tests
+
+# Type check
 mypy src
 ```
 

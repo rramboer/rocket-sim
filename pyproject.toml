@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rocket-sim"
-version = "1.0.0"
+version = "0.1.0"
 description = "A physics-based rocket trajectory simulation library"
 readme = "README.md"
 license = "MIT"
@@ -21,7 +21,7 @@ keywords = [
     "education",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
     "Intended Audience :: Science/Research",
@@ -48,8 +48,6 @@ dev = [
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
     "ruff>=0.1.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
     "pre-commit>=3.0.0",
 ]
 docs = [
@@ -62,11 +60,11 @@ docs = [
 rocket-sim = "rocket_sim.cli:cli_main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/rocket-sim"
-Documentation = "https://github.com/yourusername/rocket-sim#readme"
-Repository = "https://github.com/yourusername/rocket-sim.git"
-Issues = "https://github.com/yourusername/rocket-sim/issues"
-Changelog = "https://github.com/yourusername/rocket-sim/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/rramboer/rocket-sim"
+Documentation = "https://github.com/rramboer/rocket-sim#readme"
+Repository = "https://github.com/rramboer/rocket-sim.git"
+Issues = "https://github.com/rramboer/rocket-sim/issues"
+Changelog = "https://github.com/rramboer/rocket-sim/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -105,18 +103,8 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["rocket_sim"]
 
-# Black - Code formatter
-[tool.black]
-line-length = 100
-target-version = ["py310", "py311", "py312"]
-include = '\.pyi?$'
-
-# isort - Import sorter
-[tool.isort]
-profile = "black"
-line_length = 100
-known_first_party = ["rocket_sim"]
-src_paths = ["src", "tests"]
+[tool.ruff.format]
+docstring-code-format = true
 
 # MyPy - Static type checker
 [tool.mypy]

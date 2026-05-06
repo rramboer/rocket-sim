@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2024-01-24
+## [Unreleased]
+
+### Planned
+
+- Multi-stage rocket support
+- Atmospheric drag integrated into trajectory simulation
+- 3D trajectory visualization
+- Real-time simulation mode
+- Export to various data formats (CSV, JSON)
+- Orbital insertion calculations
+
+## [0.1.0]
+
+First public release on PyPI.
 
 ### Added
 
@@ -73,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - pytest test suite with fixtures
   - Pre-commit hooks configuration
   - GitHub Actions CI/CD
-  - Black, isort, ruff for code quality
+  - Ruff for linting and formatting
   - mypy for type checking
 
 ### Technical Details
@@ -83,15 +96,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NumPy for numerical operations
 - Modern Python packaging with pyproject.toml
 - src-layout package structure
-
-## [Unreleased]
-
-### Planned
-
-- Multi-stage rocket support
-- Atmospheric drag simulation
-- 3D trajectory visualization
-- Real-time simulation mode
-- Rocket builder GUI
-- Export to various data formats (CSV, JSON)
-- Orbital insertion calculations

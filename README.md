@@ -1,9 +1,9 @@
 # Rocket Simulator
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![PyPI](https://img.shields.io/pypi/v/rocket-sim.svg)](https://pypi.org/project/rocket-sim/)
+[![Python](https://img.shields.io/pypi/pyversions/rocket-sim.svg)](https://pypi.org/project/rocket-sim/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)]()
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![CI](https://github.com/rramboer/rocket-sim/actions/workflows/ci.yml/badge.svg)](https://github.com/rramboer/rocket-sim/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 A physics-based rocket trajectory simulation library for Python. Simulate rocket launches with realistic gravitational physics, visualize trajectories, and compare real-world rockets.
@@ -25,14 +25,14 @@ A physics-based rocket trajectory simulation library for Python. Simulate rocket
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/rocket-sim.git
+pip install rocket-sim
+```
+
+Or, for development:
+
+```bash
+git clone https://github.com/rramboer/rocket-sim.git
 cd rocket-sim
-
-# Install in development mode
-pip install -e .
-
-# Or install with development dependencies
 pip install -e ".[dev]"
 ```
 
@@ -188,7 +188,7 @@ rocket-sim/
 
 ```bash
 # Clone and install with dev dependencies
-git clone https://github.com/yourusername/rocket-sim.git
+git clone https://github.com/rramboer/rocket-sim.git
 cd rocket-sim
 pip install -e ".[dev]"
 
@@ -212,12 +212,9 @@ pytest tests/test_physics.py
 ### Code Quality
 
 ```bash
-# Format code
-black src tests
-isort src tests
-
-# Lint
-ruff check src tests
+# Lint and format (Ruff handles both)
+ruff check --fix src tests
+ruff format src tests
 
 # Type checking
 mypy src
