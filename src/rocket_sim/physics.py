@@ -82,10 +82,12 @@ class Physics:
             ValueError: If altitude is negative.
 
         Examples:
-            >>> Physics.gravity_at_altitude(0)  # Surface gravity
+            >>> Physics.gravity_at_altitude(
+            ...     0
+            ... )  # Surface gravity (from GM/R²; ~9.82, slightly above the conventional 9.80665)
             9.819...
-            >>> Physics.gravity_at_altitude(400_000)  # ISS orbit ~400km
-            8.676...
+            >>> Physics.gravity_at_altitude(400_000)  # ISS orbit ~400 km
+            8.694...
         """
         if altitude < 0:
             raise ValueError(f"Altitude cannot be negative: {altitude}")
@@ -120,9 +122,9 @@ class Physics:
 
         Examples:
             >>> Physics.escape_velocity(0)  # From Earth's surface
-            11185.7...
+            11185.9...
             >>> Physics.escape_velocity(400_000)  # From ISS orbit
-            10926.5...
+            10850.5...
         """
         if altitude < 0:
             raise ValueError(f"Altitude cannot be negative: {altitude}")
@@ -167,20 +169,25 @@ class Physics:
     @staticmethod
     def atmospheric_density(altitude: float) -> float:
         """
-        Estimate atmospheric density using exponential atmosphere model.
+        Estimate atmospheric density using an exponential-atmosphere model.
 
         This is a simplified model that assumes exponential decay of
-        atmospheric density with altitude. Accurate for altitudes up to
-        about 100 km.
+        atmospheric density with altitude. Reasonable up to about 100 km.
+
+        Note:
+            This helper is exposed for users doing their own analyses; it
+            is **not** invoked by the default `RocketSimulation` trajectory
+            loop. The trajectory simulation is currently atmosphere-free.
 
         Args:
             altitude: Height above surface in meters. Must be >= 0.
 
         Returns:
-            Atmospheric density in kg/m^3.
+            Atmospheric density in kg/m^3. Returns 0 for altitudes above
+            100 km (Karman line).
 
-        Note:
-            Returns 0 for altitudes above 100 km (Karman line).
+        Raises:
+            ValueError: If altitude is negative.
         """
         if altitude < 0:
             raise ValueError(f"Altitude cannot be negative: {altitude}")
@@ -207,6 +214,11 @@ class Physics:
 
         Uses the standard drag equation: F_d = 0.5 * rho * v^2 * C_d * A
 
+        Note:
+            Like `atmospheric_density`, this is a standalone utility for
+            users doing their own analyses. The default `RocketSimulation`
+            trajectory loop does not apply drag.
+
         Args:
             velocity: Speed in m/s.
             altitude: Height above surface in meters.
@@ -215,6 +227,9 @@ class Physics:
 
         Returns:
             Drag force in Newtons (always positive, opposing motion).
+
+        Raises:
+            ValueError: If altitude is negative (propagated from atmospheric_density).
         """
         rho = Physics.atmospheric_density(altitude)
         return 0.5 * rho * velocity**2 * drag_coefficient * cross_sectional_area
