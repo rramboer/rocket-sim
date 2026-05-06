@@ -1,198 +1,207 @@
-"""
-Tests for the simulation engine.
-"""
+"""Tests for the trajectory simulation engine."""
+
+from __future__ import annotations
+
+import math
+
+import pytest
 
 from rocket_sim.config import SimulationConfig
-from rocket_sim.models import RocketConfig
+from rocket_sim.models import Parachute, Rocket
+from rocket_sim.motors import Motor
+from rocket_sim.physics import CelestialBody, Physics
 from rocket_sim.simulation import (
+    FlightPhase,
     RocketSimulation,
-    SimulationResult,
-    SimulationState,
     simulate_multiple,
     simulate_rocket,
 )
 
 
-class TestSimulationState:
-    """Tests for SimulationState dataclass."""
+class TestBasicFlight:
+    def test_alpha_iii_lifts_off_and_lands(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        assert result.apogee_m > 50  # at least gets off the ground
+        assert result.flight_time_s > 0
+        assert result.recovery_deployment_time_s is not None
 
-    def test_state_creation(self) -> None:
-        """Test state creation."""
-        state = SimulationState(
-            time=1.0,
-            altitude=100.0,
-            velocity=50.0,
-            acceleration=10.0,
-            is_burning=True,
-        )
-        assert state.time == 1.0
-        assert state.altitude == 100.0
-        assert state.velocity == 50.0
-        assert state.is_burning
+    def test_apogee_within_published_ballpark(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        # Estes-published apogee for Alpha III + C6-5 is ~200 m;
+        # our simplified thrust curves make it run higher. Loose bound.
+        assert 150 < result.apogee_m < 600
 
-    def test_to_tuple(self) -> None:
-        """Test conversion to tuple."""
-        state = SimulationState(time=1.0, altitude=100.0, velocity=50.0)
-        t = state.to_tuple()
-        assert t == (1.0, 100.0, 50.0)
+    def test_burnout_recorded(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        assert math.isclose(result.burnout_time_s, alpha_iii.motor.burn_time, abs_tol=0.1)
+        assert result.burnout_velocity_ms > 0
 
 
-class TestSimulationResult:
-    """Tests for SimulationResult dataclass."""
+class TestPhases:
+    def test_phases_progress(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        phase_set = {s.phase for s in result.states}
+        # All four phases should appear in a normal flight.
+        assert FlightPhase.BOOST in phase_set
+        assert FlightPhase.COAST in phase_set
+        assert FlightPhase.DESCENT in phase_set
+        assert FlightPhase.LANDED in phase_set
 
-    def test_result_creation(self, simple_config: RocketConfig) -> None:
-        """Test result creation."""
-        result = SimulationResult(
-            rocket_name="Test",
-            config=simple_config,
-        )
-        assert result.rocket_name == "Test"
-        assert result.max_altitude == 0
-        assert not result.escaped
-
-    def test_time_data_extraction(self, simple_config: RocketConfig) -> None:
-        """Test extraction of time data from states."""
-        result = SimulationResult(
-            rocket_name="Test",
-            config=simple_config,
-            states=[
-                SimulationState(time=0, altitude=0, velocity=0),
-                SimulationState(time=1, altitude=100, velocity=50),
-                SimulationState(time=2, altitude=150, velocity=25),
-            ],
-        )
-        assert result.time_data == [0, 1, 2]
-
-    def test_altitude_data_extraction(self, simple_config: RocketConfig) -> None:
-        """Test extraction of altitude data from states."""
-        result = SimulationResult(
-            rocket_name="Test",
-            config=simple_config,
-            states=[
-                SimulationState(time=0, altitude=0, velocity=0),
-                SimulationState(time=1, altitude=100, velocity=50),
-                SimulationState(time=2, altitude=150, velocity=25),
-            ],
-        )
-        assert result.altitude_data == [0, 100, 150]
-
-    def test_max_altitude_km(self, simple_config: RocketConfig) -> None:
-        """Test max altitude in km conversion."""
-        result = SimulationResult(
-            rocket_name="Test",
-            config=simple_config,
-            max_altitude=100_000,
-        )
-        assert result.max_altitude_km == 100.0
-
-    def test_summary(self, simple_config: RocketConfig) -> None:
-        """Test summary generation."""
-        result = SimulationResult(
-            rocket_name="Test Rocket",
-            config=simple_config,
-            max_altitude=50_000,
-            max_velocity=500,
-            flight_time=100,
-        )
-        summary = result.summary()
-        assert "Test Rocket" in summary
-        assert "50.00 km" in summary
+    def test_boost_only_during_burn(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        for s in result.states:
+            if s.phase == FlightPhase.BOOST:
+                assert s.time <= alpha_iii.motor.burn_time + 0.1
 
 
-class TestRocketSimulation:
-    """Tests for RocketSimulation class."""
+class TestMultiBody:
+    def test_moon_apogee_higher_than_earth(self, alpha_iii: Rocket) -> None:
+        from dataclasses import replace
 
-    def test_simulation_creation(
-        self, simple_config: RocketConfig, sim_config: SimulationConfig
+        earth_result = simulate_rocket(alpha_iii)
+        moon_rocket = replace(alpha_iii, body=Physics.MOON)
+        moon_result = simulate_rocket(moon_rocket, SimulationConfig(dt=0.05, max_time=600))
+        # Moon: no atmosphere + lower gravity → much higher apogee.
+        assert moon_result.apogee_m > earth_result.apogee_m * 5
+
+    def test_mars_apogee_between_earth_and_moon(self, alpha_iii: Rocket) -> None:
+        from dataclasses import replace
+
+        earth_result = simulate_rocket(alpha_iii)
+        moon_rocket = replace(alpha_iii, body=Physics.MOON)
+        moon_result = simulate_rocket(moon_rocket, SimulationConfig(dt=0.05, max_time=600))
+        mars_rocket = replace(alpha_iii, body=Physics.MARS)
+        mars_result = simulate_rocket(mars_rocket, SimulationConfig(dt=0.05, max_time=600))
+        assert earth_result.apogee_m < mars_result.apogee_m < moon_result.apogee_m
+
+
+class TestVacuumAnalytic:
+    def test_vacuum_constant_thrust_matches_kinematics(
+        self, constant_thrust_motor: Motor, vacuum_body: CelestialBody
     ) -> None:
-        """Test simulation creation."""
-        sim = RocketSimulation(simple_config, sim_config)
-        assert sim.rocket_config == simple_config
-        assert sim.sim_config == sim_config
+        """In vacuum with constant thrust, burnout velocity should match (T/m̄ - g)·t_burn."""
+        rocket = Rocket(
+            name="VacuumTest",
+            dry_mass_kg=0.030,
+            motor=constant_thrust_motor,
+            diameter_m=0.025,
+            drag_coefficient=0.5,  # No effect in vacuum.
+            recovery=Parachute(diameter_m=0.3),
+            body=vacuum_body,
+        )
+        result = simulate_rocket(rocket, SimulationConfig(dt=0.001, max_time=200))
 
-    def test_simulation_reset(
-        self, simple_config: RocketConfig, sim_config: SimulationConfig
-    ) -> None:
-        """Test simulation reset."""
-        sim = RocketSimulation(simple_config, sim_config)
+        # Average mass over burn:
+        m0 = rocket.dry_mass_kg + constant_thrust_motor.total_mass_kg
+        m_end = rocket.dry_mass_kg + (
+            constant_thrust_motor.total_mass_kg - constant_thrust_motor.propellant_mass_kg
+        )
+        m_avg = 0.5 * (m0 + m_end)
+        avg_thrust = constant_thrust_motor.average_thrust
+        g = vacuum_body.surface_gravity
+        # Crude analytic estimate for burnout velocity: (T/m̄ - g)·t.
+        expected_v = (avg_thrust / m_avg - g) * constant_thrust_motor.burn_time
+        # Allow 10% tolerance for the mass-flow approximation.
+        assert math.isclose(result.burnout_velocity_ms, expected_v, rel_tol=0.10)
 
-        # Advance simulation
-        for _ in range(10):
-            sim.step()
 
-        assert sim.rocket.time > 0
+class TestRecoveryDeployment:
+    def test_motor_delay_fires_at_ejection_time(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        ejection = alpha_iii.motor.ejection_time()
+        assert result.recovery_deployment_time_s is not None
+        # Must fire within one timestep of the ejection time.
+        assert math.isclose(result.recovery_deployment_time_s, ejection, abs_tol=0.1)
 
-        sim.reset()
-        assert sim.rocket.time == 0
-        assert sim.rocket.altitude == 0
+    def test_apogee_mode_fires_at_apogee(self, alpha_iii: Rocket) -> None:
+        from dataclasses import replace
 
-    def test_simulation_step(
-        self, simple_config: RocketConfig, sim_config: SimulationConfig
-    ) -> None:
-        """Test single simulation step."""
-        sim = RocketSimulation(simple_config, sim_config)
-        state = sim.step()
+        # With deploy_mode='apogee', the chute fires near apogee_time.
+        result = simulate_rocket(
+            alpha_iii,
+            SimulationConfig(deploy_mode="apogee", dt=0.05),
+        )
+        assert result.recovery_deployment_time_s is not None
+        assert math.isclose(result.recovery_deployment_time_s, result.apogee_time_s, abs_tol=0.2)
+        _ = replace  # keep imported for future tests
 
-        assert isinstance(state, SimulationState)
-        assert state.time > 0
+    def test_lawn_dart_with_long_delay(self) -> None:
+        """A small light rocket with an absurdly long delay grain hits the
+        ground before recovery deploys (the "lawn dart" failure mode)."""
+        # Build a small light rocket and a motor with a 30-second delay grain.
+        long_delay_motor = Motor(
+            designation="LONG-30",
+            name="LongDelay",
+            diameter_m=0.018,
+            length_m=0.07,
+            propellant_mass_kg=0.005,
+            total_mass_kg=0.010,
+            thrust_curve=((0, 0), (1, 5), (1, 0)),
+            delay_seconds=30.0,  # Way too long.
+        )
+        rocket = Rocket(
+            name="ShortLight",
+            dry_mass_kg=0.010,
+            motor=long_delay_motor,
+            diameter_m=0.018,
+            drag_coefficient=0.75,
+            recovery=Parachute(diameter_m=0.3),
+        )
+        result = simulate_rocket(rocket, SimulationConfig(dt=0.05, max_time=120))
+        # Rocket lands before the 30 s delay grain fires:
+        assert result.flight_time_s < long_delay_motor.ejection_time()
+        # Recovery may deploy at or after the ground impact ("deployed below ground").
+        assert result.deployed_below_ground or result.recovery_deployment_time_s is None
 
-    def test_simulation_run(
-        self, simple_config: RocketConfig, fast_sim_config: SimulationConfig
-    ) -> None:
-        """Test complete simulation run."""
-        sim = RocketSimulation(simple_config, fast_sim_config)
+
+class TestSimulateMultiple:
+    def test_returns_one_result_per_rocket(self, alpha_iii: Rocket) -> None:
+        from dataclasses import replace
+
+        rocket2 = replace(alpha_iii, body=Physics.MOON)
+        results = simulate_multiple([alpha_iii, rocket2])
+        assert len(results) == 2
+
+
+class TestTimeSeries:
+    def test_states_are_chronological(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        times = [s.time for s in result.states]
+        assert times == sorted(times)
+
+    def test_altitude_data_starts_at_zero(self, alpha_iii: Rocket) -> None:
+        result = simulate_rocket(alpha_iii)
+        assert result.altitude_data[0] == 0.0
+
+
+class TestRocketSimulationClass:
+    def test_can_construct(self, alpha_iii: Rocket) -> None:
+        sim = RocketSimulation(alpha_iii)
         result = sim.run()
+        assert result.apogee_m > 0
 
-        assert isinstance(result, SimulationResult)
-        assert result.rocket_name == simple_config.name
-        assert len(result.states) > 1
-        assert result.max_altitude > 0
-        assert result.flight_time > 0
-
-    def test_simulation_landing_detection(
-        self, simple_config: RocketConfig, fast_sim_config: SimulationConfig
-    ) -> None:
-        """Test that simulation detects landing."""
-        sim = RocketSimulation(simple_config, fast_sim_config)
-        result = sim.run()
-
-        # Rocket should land (not escape)
-        assert not result.escaped
-        assert result.landing_time is not None
-        assert result.landing_time > 0
-
-    def test_simulation_generator(
-        self, simple_config: RocketConfig, fast_sim_config: SimulationConfig
-    ) -> None:
-        """Test generator-based simulation."""
-        sim = RocketSimulation(simple_config, fast_sim_config)
-
+    def test_run_generator_yields_states(self, alpha_iii: Rocket) -> None:
+        sim = RocketSimulation(alpha_iii)
         states = list(sim.run_generator())
         assert len(states) > 1
-        assert all(isinstance(s, SimulationState) for s in states)
+        assert states[0].time == 0
 
 
-class TestConvenienceFunctions:
-    """Tests for convenience simulation functions."""
+def test_invalid_deploy_mode_raises() -> None:
+    with pytest.raises(ValueError):
+        SimulationConfig(deploy_mode="oops")  # type: ignore[arg-type]
 
-    def test_simulate_rocket(
-        self, simple_config: RocketConfig, fast_sim_config: SimulationConfig
-    ) -> None:
-        """Test simulate_rocket function."""
-        result = simulate_rocket(simple_config, fast_sim_config)
 
-        assert isinstance(result, SimulationResult)
-        assert result.rocket_name == simple_config.name
+def test_negative_dt_raises() -> None:
+    with pytest.raises(ValueError):
+        SimulationConfig(dt=-1)
 
-    def test_simulate_multiple(self, fast_sim_config: SimulationConfig) -> None:
-        """Test simulate_multiple function."""
-        configs = [
-            RocketConfig(mass=1000, thrust=20000, burn_time=30, name="Rocket 1"),
-            RocketConfig(mass=2000, thrust=40000, burn_time=30, name="Rocket 2"),
-        ]
 
-        results = simulate_multiple(configs, fast_sim_config)
+def test_negative_max_time_raises() -> None:
+    with pytest.raises(ValueError):
+        SimulationConfig(max_time=-1)
 
-        assert len(results) == 2
-        assert results[0].rocket_name == "Rocket 1"
-        assert results[1].rocket_name == "Rocket 2"
+
+def test_negative_launch_altitude_raises() -> None:
+    with pytest.raises(ValueError):
+        SimulationConfig(launch_altitude_m=-1)

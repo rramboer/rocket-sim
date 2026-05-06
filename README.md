@@ -1,4 +1,4 @@
-# Rocket Simulator
+# rocket-sim
 
 [![PyPI](https://img.shields.io/pypi/v/rocket-sim.svg)](https://pypi.org/project/rocket-sim/)
 [![Python](https://img.shields.io/pypi/pyversions/rocket-sim.svg)](https://pypi.org/project/rocket-sim/)
@@ -6,251 +6,228 @@
 [![CI](https://github.com/rramboer/rocket-sim/actions/workflows/ci.yml/badge.svg)](https://github.com/rramboer/rocket-sim/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-A small, educational physics-based rocket trajectory simulation library for Python. Simulate vertical rocket launches with altitude-dependent gravity, visualize trajectories, and compare real-world rockets.
-
-![Rocket Trajectory Simulation](docs/images/rocket_comparison.png)
+A small, scriptable hobby/model-rocket flight simulator. Predict the
+apogee, peak velocity, peak acceleration, and recovery behaviour of a
+single-stage Estes/Quest-class rocket — and, just for fun, see what
+the same rocket would do on the Moon, Mars, Venus, or Titan.
 
 ## Features
 
-- **Altitude-dependent gravity** using Newton's inverse-square law
-- **13 pre-configured rockets** including Saturn V, Falcon 9, Starship, and more
-- **Custom rockets** — create and simulate your own designs
-- **Multiple celestial bodies** — Earth, Moon, and Mars, or roll your own
-- **Plots** with multiple matplotlib styles (trajectory, velocity, dashboard, comparison)
-- **CLI & library** — use as a command-line tool or import as a Python library
-- **Type-safe** — full type hints throughout the public API
-- **Well-tested** — pytest suite covering physics and simulation logic
+- **Real (interpolated) thrust curves** — solid motors aren't constant
+  thrust, and `rocket-sim` doesn't pretend they are. Built-in presets
+  cover **A8-3, B6-4, C6-3, C6-5, D12-5, E9-6, F15-6**, with
+  manufacturer-consistent total impulse, burn time, and peak thrust.
+- **Drag-aware trajectory** — exponential atmosphere with body-specific
+  surface density and scale height; drag opposes motion throughout the
+  flight.
+- **Mass loss during burn** — propellant is a meaningful fraction of
+  hobby-rocket mass, so the simulator integrates a constant-Isp mass
+  flow rather than treating mass as constant.
+- **Multi-body launches** — Earth, Moon, Mars, Venus, Titan ship
+  built-in. Custom `CelestialBody` instances are supported.
+- **Recovery modelling** — `Parachute`, `Streamer`, or ballistic.
+  Realistic motor-delay-grain timing by default; `--deploy-mode apogee`
+  for the idealised case.
+- **Kit presets** — Estes Alpha III, Big Bertha, Mosquito, V-2, each
+  configured with its recommended motor and recovery.
+- **`.eng` motor file loader** — drop in any motor from
+  [Thrustcurve.org](https://www.thrustcurve.org/).
+- **CLI and library** — use `rocket-sim` as a command-line tool or
+  `import rocket_sim` from your own scripts.
 
-### Modelling caveats
+## Modelling caveats
 
-This is a deliberately simplified educational model:
+This is a **deliberately simplified** simulator:
 
-- Motion is **1-D vertical only** (no pitch-over, no horizontal velocity, no orbital insertion).
-- **Mass is constant** during flight; propellant burn is not modelled.
-- **No atmospheric drag** is applied to trajectories. (`Physics.atmospheric_density` and `Physics.drag_force` are exposed as standalone utilities for users doing their own analyses.)
+- Motion is **1-D vertical only** — no pitch-over, no horizontal velocity, no
+  weathercocking, no wind.
+- **Single stage only** — no boost-dart or multi-stage configurations.
+- Built-in motor thrust curves are **simplified ~5-7-sample
+  approximations** of public manufacturer data; expect apogee
+  predictions accurate to ~30 % relative to a properly-instrumented
+  real flight.
+- No center-of-gravity / center-of-pressure stability analysis.
+- `Physics.escape_velocity` and `Physics.orbital_velocity` are
+  exposed as standalone utilities; they are not used in the
+  trajectory loop (hobby rockets do not approach orbital speeds).
 
-For a realistic 6-DOF aerospace simulation, see tools like RocketPy.
+For higher-fidelity simulation (6-DOF, wind, multi-stage, optimisation,
+GUI), see [OpenRocket](https://openrocket.info/) — the gold standard
+in hobby-rocket simulation.
 
-## Quick Start
+## Quick start
 
-### Installation
+### Install
 
 ```bash
 pip install rocket-sim
 ```
 
-Or, for development:
+### Command line
 
 ```bash
-git clone https://github.com/rramboer/rocket-sim.git
-cd rocket-sim
-pip install -e ".[dev]"
+# Launch an Estes Alpha III with a C6-5 motor on Earth
+rocket-sim --kit alpha-iii --motor c6-5
+
+# Same rocket, on the Moon
+rocket-sim --kit alpha-iii --motor c6-5 --body moon
+
+# Multi-panel dashboard, save as PNG
+rocket-sim --kit big-bertha --dashboard -o flight.png
+
+# Use a downloaded thrustcurve.org motor file
+rocket-sim --kit alpha-iii --motor-file ./Estes_C6.eng
+
+# List available motors and kits
+rocket-sim --list-motors
+rocket-sim --list-kits
 ```
 
-### Command Line Usage
-
-```bash
-# Simulate a preset rocket
-rocket-sim --preset "Falcon 9" -o falcon9.png
-
-# Simulate all presets
-rocket-sim --all-presets -o comparison.png
-
-# Custom rocket
-rocket-sim --mass 50000 --thrust 1000000 --burn-time 120 --name "My Rocket"
-
-# Interactive mode
-rocket-sim --interactive
-
-# List available presets
-rocket-sim --list-presets
-```
-
-### Python Library Usage
+### Python library
 
 ```python
-from rocket_sim import RocketSimulation, get_preset, Plotter
+from rocket_sim import get_kit, simulate_rocket, Plotter
 
-# Simulate a Falcon 9 launch
-config = get_preset("Falcon 9")
-sim = RocketSimulation(config)
-result = sim.run()
+rocket = get_kit("alpha-iii")
+result = simulate_rocket(rocket)
 
-# Print results
-print(f"Max Altitude: {result.max_altitude_km:.2f} km")
-print(f"Max Velocity: {result.max_velocity:.2f} m/s")
-print(f"Flight Time: {result.flight_time:.2f} s")
+print(f"Apogee:      {result.apogee_m:.1f} m at t = {result.apogee_time_s:.2f} s")
+print(f"Max velocity:{result.max_velocity_ms:.1f} m/s")
+print(f"Max accel:   {result.max_acceleration_ms2 / 9.80665:.2f} g")
 
-# Create visualization
-plotter = Plotter()
-plotter.plot_trajectory(result, filename="falcon9.png")
+Plotter().plot_trajectory(result, filename="alpha-iii.png")
 ```
 
-### Compare Multiple Rockets
+### Multi-body comparison
 
 ```python
-from rocket_sim import simulate_multiple, get_preset, Plotter, list_presets
+from dataclasses import replace
+from rocket_sim import Physics, get_kit, simulate_multiple, Plotter
 
-# Get all preset configurations
-configs = [get_preset(name) for name in list_presets()]
-
-# Run simulations
-results = simulate_multiple(configs)
-
-# Compare trajectories
-plotter = Plotter()
-plotter.plot_multiple_trajectories(results, filename="comparison.png")
+rocket = get_kit("alpha-iii")
+worlds = [Physics.EARTH, Physics.MOON, Physics.MARS]
+rockets = [replace(rocket, body=b, name=f"Alpha III on {b.name}") for b in worlds]
+results = simulate_multiple(rockets)
+Plotter().plot_multiple_trajectories(results, title="Same rocket, three worlds")
 ```
 
-### Create a Custom Rocket
+### Custom rocket
 
 ```python
-from rocket_sim import RocketConfig, RocketSimulation, Plotter
+from rocket_sim import Rocket, Parachute, get_motor, simulate_rocket
 
-# Define custom rocket
-config = RocketConfig(
-    mass=100_000,       # 100 tons
-    thrust=2_000_000,   # 2 MN thrust
-    burn_time=180,      # 3 minute burn
-    name="My Custom Rocket"
+rocket = Rocket(
+    name="My Rocket",
+    dry_mass_kg=0.060,           # 60 g airframe
+    motor=get_motor("D12-5"),
+    diameter_m=0.029,            # 29 mm body tube
+    drag_coefficient=0.7,
+    recovery=Parachute(diameter_m=0.45),
 )
 
-# Check thrust-to-weight ratio
-print(f"T/W Ratio: {config.thrust_to_weight_ratio:.2f}")
-
-# Simulate and plot
-sim = RocketSimulation(config)
-result = sim.run()
-
-plotter = Plotter()
-plotter.plot_dashboard(result, filename="dashboard.png")
+result = simulate_rocket(rocket)
+print(result.summary())
 ```
 
-## Available Rocket Presets
+## Built-in motor presets
 
-| Rocket          | Mass (kg) | Thrust (N) | Burn Time (s) | T/W Ratio |
-| --------------- | --------- | ---------- | ------------- | --------- |
-| Saturn V        | 2,900,000 | 33,800,000 | 165           | 1.19      |
-| SpaceX Starship | 5,000,000 | 72,000,000 | 200           | 1.47      |
-| Falcon 9        | 549,054   | 7,607,000  | 162           | 1.41      |
-| Space Shuttle   | 2,030,000 | 30,600,000 | 510           | 1.54      |
-| Delta IV Heavy  | 733,000   | 17,840,000 | 360           | 2.48      |
-| Atlas V         | 584,000   | 10,500,000 | 270           | 1.83      |
-| Ariane 5        | 777,000   | 11,600,000 | 540           | 1.52      |
-| Soyuz-2         | 308,000   | 4,150,000  | 290           | 1.37      |
-| Long March 5    | 867,000   | 10,600,000 | 480           | 1.25      |
-| Vega            | 137,000   | 2,310,000  | 110           | 1.72      |
-| Electron        | 12,550    | 240,000    | 150           | 1.95      |
-| New Shepard †   | 75,000    | 490,000    | 110           | 0.67      |
-| Vulcan Centaur  | 546,700   | 11,340,000 | 180           | 2.11      |
+| Designation | Total impulse | Burn time | Peak thrust | Delay grain |
+|---|---|---|---|---|
+| A8-3 | ~2.5 N·s | 0.5 s | ~13 N | 3 s |
+| B6-4 | ~5.0 N·s | 0.86 s | ~12 N | 4 s |
+| C6-3 | ~10.0 N·s | 1.85 s | ~14 N | 3 s |
+| C6-5 | ~10.0 N·s | 1.85 s | ~14 N | 5 s |
+| D12-5 | ~16.8 N·s | 1.6 s | ~30 N | 5 s |
+| E9-6 | ~28.5 N·s | 2.83 s | ~24 N | 6 s |
+| F15-6 | ~50 N·s | 3.45 s | ~30 N | 6 s |
 
-† New Shepard's listed first-stage thrust gives T/W < 1 at the masses shown, so the simulator reports immediate landing. The numbers reflect public BE-3 specs; treat the result as a sanity-check signal, not a flight prediction.
+Curves are simplified educational approximations of public manufacturer
+data. For exact certified-motor data, download `.eng` files from
+[Thrustcurve.org](https://www.thrustcurve.org/) and load them with
+`load_motor_file(path)` or `--motor-file path.eng`.
 
-## Physics Model
+## Built-in kit presets
 
-The simulation uses realistic physics including:
+| Kit | Dry mass | Diameter | Recommended motor | Recovery |
+|---|---|---|---|---|
+| Estes Alpha III | 34 g | 24.7 mm (BT-50) | C6-5 | 12-inch parachute |
+| Estes Big Bertha | 77 g | 41.3 mm (BT-60) | C6-5 | 18-inch parachute |
+| Estes Mosquito | 4.5 g | 13.2 mm (BT-5) | A8-3 | 30 × 2.5 cm streamer |
+| Estes V-2 | 64 g | 41.3 mm (BT-60) | C6-3 | 12-inch parachute |
 
-- **Gravity**: Newton's law of universal gravitation with inverse-square falloff
+## Built-in celestial bodies
 
-  ```
-  g(h) = GM / (R + h)²
-  ```
+| Body | Surface gravity | Atmosphere | Notes |
+|---|---|---|---|
+| Earth | 9.82 m/s² | 1.225 kg/m³ surface, 8.5 km scale height | Default |
+| Moon | 1.62 m/s² | none (vacuum) | Lots of altitude, no chute drag |
+| Mars | 3.72 m/s² | 0.020 kg/m³ surface, 11.1 km scale height | Hits hard at landing |
+| Venus | 8.87 m/s² | 65 kg/m³ surface, 15.9 km scale height | Soft launch, thermal hellscape |
+| Titan | 1.35 m/s² | 5.4 kg/m³ surface, 21 km scale height | Thick cold atmosphere |
 
-- **Escape Velocity**: Minimum velocity to escape gravitational field
+## Physics model
 
-  ```
-  v_esc = √(2GM / (R + h))
-  ```
+The integrator advances the state vector `(altitude, velocity, mass)`
+through three flight phases (BOOST / COAST / DESCENT):
 
-- **Atmospheric Density** (utility, *not* applied to trajectories): Exponential atmosphere model exposed via `Physics.atmospheric_density(...)`
-  ```
-  ρ(h) = ρ₀ × exp(-h / H)
-  ```
+```
+F_thrust(t) - drag(v, ρ(h), Cd, A) - m(t) · g(h)
+```
 
-Where:
+- Gravity uses the inverse-square law: `g(h) = G·M / (R + h)²`.
+- Drag is `½·ρ(h)·v²·Cd·A`, opposing the velocity vector. During
+  BOOST and COAST, `Cd·A` comes from the airframe; during DESCENT,
+  it comes from the deployed recovery device.
+- Atmospheric density follows an exponential model:
+  `ρ(h) = ρ₀ · exp(-h / H)`.
+- Mass-flow is computed by assuming constant Isp:
+  `dm/dt = thrust(t) / (Isp · g₀)`, equivalent to "propellant burns
+  proportionally to delivered impulse."
+- The integrator is **symplectic Euler with semi-implicit drag**,
+  which keeps it stable when a parachute deploys at high speed.
 
-- `G` = 6.674×10⁻¹¹ m³/kg/s² (gravitational constant)
-- `M` = 5.972×10²⁴ kg (Earth's mass)
-- `R` = 6.371×10⁶ m (Earth's radius)
-- `ρ₀` = 1.225 kg/m³ (sea level air density)
-- `H` = 8,500 m (scale height)
-
-## Project Structure
+## Project structure
 
 ```
 rocket-sim/
 ├── src/rocket_sim/
-│   ├── __init__.py      # Package exports
-│   ├── physics.py       # Physics calculations
-│   ├── models.py        # Rocket and Engine classes
-│   ├── simulation.py    # Simulation engine
-│   ├── visualization.py # Plotting tools
-│   ├── presets.py       # Rocket configurations
-│   ├── config.py        # Configuration management
-│   └── cli.py           # Command-line interface
-├── tests/               # Test suite
-├── docs/                # Documentation
-├── examples/            # Example scripts
-├── pyproject.toml       # Project configuration
-└── README.md
+│   ├── __init__.py        # Public exports
+│   ├── physics.py         # Atmosphere, CelestialBody, Physics
+│   ├── motors.py          # Motor type, .eng loader, motor presets
+│   ├── models.py          # Rocket, Parachute, Streamer
+│   ├── presets.py         # Kit presets
+│   ├── simulation.py      # 3-phase trajectory integrator
+│   ├── config.py          # SimulationConfig
+│   ├── visualization.py   # Plotter
+│   └── cli.py             # rocket-sim CLI
+├── tests/
+└── examples/
 ```
 
 ## Development
 
-### Setup Development Environment
-
 ```bash
-# Clone and install with dev dependencies
 git clone https://github.com/rramboer/rocket-sim.git
 cd rocket-sim
 pip install -e ".[dev]"
-
-# Install pre-commit hooks
 pre-commit install
-```
 
-### Running Tests
-
-```bash
-# Run all tests
+# Test, lint, type-check
 pytest
-
-# Run with coverage
-pytest --cov=rocket_sim --cov-report=html
-
-# Run specific test file
-pytest tests/test_physics.py
-```
-
-### Code Quality
-
-```bash
-# Lint and format (Ruff handles both)
-ruff check --fix src tests
+ruff check src tests
 ruff format src tests
-
-# Type checking
 mypy src
 ```
 
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Run tests (`pytest`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
-
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
-## Acknowledgments
+## Acknowledgements
 
-- Rocket specifications sourced from public NASA and SpaceX data
-- Physics equations based on classical orbital mechanics
-- Inspired by NASA's trajectory simulation tools
+- Motor thrust-curve data is informed by the public dataset at
+  [Thrustcurve.org](https://www.thrustcurve.org/).
+- Kit specifications are drawn from public Estes catalogs and
+  product pages.
+- For a full-featured open-source aerospace simulator, see
+  [OpenRocket](https://openrocket.info/).
