@@ -6,19 +6,30 @@
 [![CI](https://github.com/rramboer/rocket-sim/actions/workflows/ci.yml/badge.svg)](https://github.com/rramboer/rocket-sim/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-A physics-based rocket trajectory simulation library for Python. Simulate rocket launches with realistic gravitational physics, visualize trajectories, and compare real-world rockets.
+A small, educational physics-based rocket trajectory simulation library for Python. Simulate vertical rocket launches with altitude-dependent gravity, visualize trajectories, and compare real-world rockets.
 
 ![Rocket Trajectory Simulation](docs/images/rocket_comparison.png)
 
 ## Features
 
-- **Realistic Physics** - Altitude-dependent gravity using Newton's inverse-square law
-- **Pre-configured Rockets** - 13 real-world rockets including Saturn V, Falcon 9, Starship, and more
-- **Custom Rockets** - Create and simulate your own rocket designs
-- **Beautiful Visualizations** - Publication-quality plots with multiple styling options
-- **CLI & Library** - Use as a command-line tool or import as a Python library
-- **Type-Safe** - Full type hints for excellent IDE support
-- **Well-Tested** - Comprehensive test suite with pytest
+- **Altitude-dependent gravity** using Newton's inverse-square law
+- **13 pre-configured rockets** including Saturn V, Falcon 9, Starship, and more
+- **Custom rockets** — create and simulate your own designs
+- **Multiple celestial bodies** — Earth, Moon, and Mars, or roll your own
+- **Plots** with multiple matplotlib styles (trajectory, velocity, dashboard, comparison)
+- **CLI & library** — use as a command-line tool or import as a Python library
+- **Type-safe** — full type hints throughout the public API
+- **Well-tested** — pytest suite covering physics and simulation logic
+
+### Modelling caveats
+
+This is a deliberately simplified educational model:
+
+- Motion is **1-D vertical only** (no pitch-over, no horizontal velocity, no orbital insertion).
+- **Mass is constant** during flight; propellant burn is not modelled.
+- **No atmospheric drag** is applied to trajectories. (`Physics.atmospheric_density` and `Physics.drag_force` are exposed as standalone utilities for users doing their own analyses.)
+
+For a realistic 6-DOF aerospace simulation, see tools like RocketPy.
 
 ## Quick Start
 
@@ -130,8 +141,10 @@ plotter.plot_dashboard(result, filename="dashboard.png")
 | Long March 5    | 867,000   | 10,600,000 | 480           | 1.25      |
 | Vega            | 137,000   | 2,310,000  | 110           | 1.72      |
 | Electron        | 12,550    | 240,000    | 150           | 1.95      |
-| New Shepard     | 75,000    | 490,000    | 110           | 0.67      |
+| New Shepard †   | 75,000    | 490,000    | 110           | 0.67      |
 | Vulcan Centaur  | 546,700   | 11,340,000 | 180           | 2.11      |
+
+† New Shepard's listed first-stage thrust gives T/W < 1 at the masses shown, so the simulator reports immediate landing. The numbers reflect public BE-3 specs; treat the result as a sanity-check signal, not a flight prediction.
 
 ## Physics Model
 
@@ -149,7 +162,7 @@ The simulation uses realistic physics including:
   v_esc = √(2GM / (R + h))
   ```
 
-- **Atmospheric Density** (optional): Exponential atmosphere model
+- **Atmospheric Density** (utility, *not* applied to trajectories): Exponential atmosphere model exposed via `Physics.atmospheric_density(...)`
   ```
   ρ(h) = ρ₀ × exp(-h / H)
   ```

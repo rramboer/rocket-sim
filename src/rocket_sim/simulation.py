@@ -152,11 +152,9 @@ class RocketSimulation:
         self.sim_config = sim_config or SimulationConfig()
         self.body = body or Physics.EARTH
 
-        # Create rocket instance
-        self.rocket = Rocket.from_config(rocket_config)
-
-        # Configure logging
-        logging.basicConfig(level=self.sim_config.log_level)
+        # Create rocket instance bound to this simulation's body so that
+        # gravity and energy properties stay consistent.
+        self.rocket = Rocket.from_config(rocket_config, body=self.body)
 
         logger.debug(
             f"Initialized simulation for {rocket_config.name} "
@@ -182,9 +180,9 @@ class RocketSimulation:
             dt = self.sim_config.dt
 
         old_velocity = self.rocket.velocity
-        altitude, velocity = self.rocket.update(dt, self.body)
+        altitude, velocity = self.rocket.update(dt)
 
-        acceleration = (velocity - old_velocity) / dt if dt > 0 else 0.0
+        acceleration = (velocity - old_velocity) / dt
         is_burning = self.rocket.engine.is_burning(self.rocket.time)
 
         return SimulationState(
@@ -307,6 +305,7 @@ class RocketSimulation:
 def simulate_rocket(
     config: RocketConfig,
     sim_config: SimulationConfig | None = None,
+    body: CelestialBody | None = None,
 ) -> SimulationResult:
     """
     Convenience function to run a single rocket simulation.
@@ -314,17 +313,19 @@ def simulate_rocket(
     Args:
         config: Rocket configuration.
         sim_config: Optional simulation configuration.
+        body: Celestial body for gravity. Defaults to Earth.
 
     Returns:
         SimulationResult with trajectory data.
     """
-    sim = RocketSimulation(config, sim_config)
+    sim = RocketSimulation(config, sim_config, body=body)
     return sim.run()
 
 
 def simulate_multiple(
     configs: list[RocketConfig],
     sim_config: SimulationConfig | None = None,
+    body: CelestialBody | None = None,
 ) -> list[SimulationResult]:
     """
     Simulate multiple rockets.
@@ -332,12 +333,9 @@ def simulate_multiple(
     Args:
         configs: List of rocket configurations.
         sim_config: Optional simulation configuration (shared).
+        body: Celestial body for gravity (shared). Defaults to Earth.
 
     Returns:
         List of SimulationResult objects.
     """
-    results = []
-    for config in configs:
-        result = simulate_rocket(config, sim_config)
-        results.append(result)
-    return results
+    return [simulate_rocket(config, sim_config, body=body) for config in configs]

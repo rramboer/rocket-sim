@@ -336,7 +336,6 @@ def main(argv: list[str] | None = None) -> int:
     sim_config = SimulationConfig(
         dt=args.dt,
         max_time=args.max_time,
-        log_level=logging.DEBUG if args.verbose >= 2 else logging.WARNING,
     )
 
     # Run simulations

@@ -74,20 +74,15 @@ class RocketConfig:
 @dataclass
 class Engine:
     """
-    Represents a rocket engine.
-
-    Models a simple rocket engine with constant thrust output during
-    its burn time.
+    Represents a rocket engine with constant thrust during its burn time.
 
     Attributes:
         thrust: Thrust force in Newtons.
         burn_time: Duration of thrust in seconds.
-        specific_impulse: Engine efficiency in seconds (optional).
     """
 
     thrust: float  # Newtons
     burn_time: float  # seconds
-    specific_impulse: float = 300.0  # seconds (typical for chemical rockets)
 
     def __post_init__(self) -> None:
         """Validate engine parameters."""
@@ -95,8 +90,6 @@ class Engine:
             raise ValueError(f"Thrust cannot be negative: {self.thrust}")
         if self.burn_time < 0:
             raise ValueError(f"Burn time cannot be negative: {self.burn_time}")
-        if self.specific_impulse <= 0:
-            raise ValueError(f"Specific impulse must be positive: {self.specific_impulse}")
 
     @property
     def total_impulse(self) -> float:
@@ -104,7 +97,7 @@ class Engine:
         return self.thrust * self.burn_time
 
     def is_burning(self, elapsed_time: float) -> bool:
-        """Check if engine is still burning at given time."""
+        """Check if engine is burning at given time. Returns True for elapsed_time in [0, burn_time)."""
         return 0 <= elapsed_time < self.burn_time
 
     def get_thrust(self, elapsed_time: float) -> float:
@@ -125,12 +118,13 @@ class Rocket:
     """
     Represents a rocket with physical state and propulsion.
 
-    This class models the rocket's physical properties and tracks its
-    state (position, velocity) during simulation.
+    Note: Mass is held constant throughout the simulation; propellant
+    burn is not modelled. This is the "constant-mass approximation."
 
     Attributes:
-        mass: Rocket mass in kilograms.
+        mass: Rocket mass in kilograms (treated as constant).
         engine: Engine instance providing propulsion.
+        body: Celestial body for gravity calculations. Defaults to Earth.
         altitude: Current altitude in meters.
         velocity: Current velocity in m/s (positive = upward).
         time: Elapsed time since launch in seconds.
@@ -138,6 +132,7 @@ class Rocket:
 
     mass: float
     engine: Engine
+    body: CelestialBody | None = None
     altitude: float = field(default=0.0, init=False)
     velocity: float = field(default=0.0, init=False)
     time: float = field(default=0.0, init=False)
@@ -148,18 +143,28 @@ class Rocket:
             raise ValueError(f"Mass must be positive: {self.mass}")
 
     @classmethod
-    def from_config(cls, config: RocketConfig) -> Rocket:
+    def from_config(
+        cls,
+        config: RocketConfig,
+        body: CelestialBody | None = None,
+    ) -> Rocket:
         """
         Create a Rocket instance from a RocketConfig.
 
         Args:
             config: Configuration parameters for the rocket.
+            body: Celestial body for gravity. Defaults to Earth.
 
         Returns:
             A new Rocket instance.
         """
         engine = Engine(thrust=config.thrust, burn_time=config.burn_time)
-        return cls(mass=config.mass, engine=engine)
+        return cls(mass=config.mass, engine=engine, body=body)
+
+    @property
+    def _body(self) -> CelestialBody:
+        """Resolve body to Earth if unset (kept private to avoid changing the dataclass field type)."""
+        return self.body if self.body is not None else Physics.EARTH
 
     def reset(self) -> None:
         """Reset rocket to initial launch state."""
@@ -167,11 +172,7 @@ class Rocket:
         self.velocity = 0.0
         self.time = 0.0
 
-    def update(
-        self,
-        dt: float,
-        body: CelestialBody | None = None,
-    ) -> tuple[float, float]:
+    def update(self, dt: float) -> tuple[float, float]:
         """
         Update rocket state for a time step.
 
@@ -180,19 +181,19 @@ class Rocket:
         integration, which conserves energy better than the plain
         Euler method for orbital trajectories.
 
+        Mass is held constant — no propellant burn is modelled.
+
         Args:
             dt: Time step in seconds.
-            body: Celestial body for gravity calculation. Defaults to Earth.
 
         Returns:
             Tuple of (altitude, velocity) after the update.
         """
-        # Get current gravity
-        gravity = Physics.gravity_at_altitude(self.altitude, body)
+        gravity = Physics.gravity_at_altitude(self.altitude, self._body)
 
-        # Calculate acceleration
         thrust = self.engine.get_thrust(self.time)
         if thrust > 0:  # noqa: SIM108
+            # Kept as if/else for readability; thrust and coast acceleration are physically distinct.
             # During burn: a = (T - mg) / m = T/m - g
             acceleration = thrust / self.mass - gravity
         else:
@@ -219,15 +220,17 @@ class Rocket:
     @property
     def potential_energy(self) -> float:
         """
-        Calculate gravitational potential energy relative to surface.
+        Calculate gravitational potential energy relative to the surface.
 
-        Uses the exact formula accounting for varying gravity with altitude.
+        Uses the exact integral of GMm/r² (variable gravity), expressed
+        equivalently as PE = m·g₀·h · R/(R + h), where g₀ and R are the
+        body's surface gravity and radius.
         """
-        g0 = Physics.EARTH.surface_gravity
-        r = Physics.EARTH.radius
-        # PE = mgh * (r / (r + h)) for varying gravity
-        if self.altitude == 0:
+        if self.altitude <= 0:
             return 0.0
+        body = self._body
+        g0 = body.surface_gravity
+        r = body.radius
         return self.mass * g0 * self.altitude * (r / (r + self.altitude))
 
     @property
@@ -243,4 +246,4 @@ class Rocket:
     @property
     def is_on_ground(self) -> bool:
         """Check if rocket is on the ground."""
-        return self.altitude == 0 and self.velocity == 0
+        return self.altitude <= 0 and self.velocity <= 0

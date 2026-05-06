@@ -7,6 +7,8 @@ making it easy to run simulations with real-world parameters.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from rocket_sim.models import RocketConfig
 
 # Pre-configured rocket specifications based on real-world data
@@ -110,15 +112,13 @@ def get_preset(name: str) -> RocketConfig:
         >>> config.thrust
         7607000
     """
-    # Try exact match first
     if name in PRESETS:
-        return PRESETS[name]
+        return replace(PRESETS[name])
 
-    # Try case-insensitive match
     name_lower = name.lower()
     for preset_name, config in PRESETS.items():
         if preset_name.lower() == name_lower:
-            return config
+            return replace(config)
 
     available = ", ".join(PRESETS.keys())
     raise KeyError(f"Unknown preset: '{name}'. Available: {available}")

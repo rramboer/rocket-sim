@@ -7,11 +7,12 @@ accounting for gravitational effects at various altitudes using real physics.
 
 from rocket_sim.config import SimulationConfig
 from rocket_sim.models import Engine, Rocket, RocketConfig
-from rocket_sim.physics import Physics
+from rocket_sim.physics import CelestialBody, Physics
 from rocket_sim.presets import PRESETS, get_preset, list_presets
 from rocket_sim.simulation import (
     RocketSimulation,
     SimulationResult,
+    SimulationState,
     simulate_multiple,
     simulate_rocket,
 )
@@ -26,11 +27,13 @@ __all__ = [
     "RocketConfig",
     "RocketSimulation",
     "SimulationResult",
+    "SimulationState",
     # Simulation functions
     "simulate_rocket",
     "simulate_multiple",
     # Physics
     "Physics",
+    "CelestialBody",
     # Configuration
     "SimulationConfig",
     # Presets
