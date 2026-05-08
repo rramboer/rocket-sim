@@ -24,10 +24,14 @@ hobby trajectories require.
 
 from __future__ import annotations
 
+import csv
+import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 from rocket_sim.config import SimulationConfig
 from rocket_sim.models import Parachute, Rocket, Streamer
@@ -129,6 +133,79 @@ class SimulationResult:
             f"  Flight time:          {self.flight_time_s:7.2f} s\n"
             f"  Landing velocity:     {self.landing_velocity_ms:7.2f} m/s"
         )
+
+    # --- Export helpers ---------------------------------------------------
+
+    _CSV_COLUMNS = (
+        "time_s",
+        "altitude_m",
+        "velocity_ms",
+        "acceleration_ms2",
+        "mass_kg",
+        "thrust_n",
+        "drag_n",
+        "phase",
+    )
+
+    def to_csv(self, path: Path | str) -> None:
+        """
+        Write the time-series of states to a CSV file.
+
+        Columns: time_s, altitude_m, velocity_ms, acceleration_ms2,
+        mass_kg, thrust_n, drag_n, phase. One row per simulation step.
+        """
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(self._CSV_COLUMNS)
+            for s in self.states:
+                writer.writerow(
+                    [
+                        s.time,
+                        s.altitude,
+                        s.velocity,
+                        s.acceleration,
+                        s.mass,
+                        s.thrust,
+                        s.drag,
+                        s.phase.value,
+                    ]
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serialisable dict containing summary stats and the time-series."""
+        return {
+            "rocket_name": self.rocket_name,
+            "summary": {
+                "apogee_m": self.apogee_m,
+                "apogee_time_s": self.apogee_time_s,
+                "burnout_altitude_m": self.burnout_altitude_m,
+                "burnout_velocity_ms": self.burnout_velocity_ms,
+                "burnout_time_s": self.burnout_time_s,
+                "max_velocity_ms": self.max_velocity_ms,
+                "max_acceleration_ms2": self.max_acceleration_ms2,
+                "flight_time_s": self.flight_time_s,
+                "recovery_deployment_time_s": self.recovery_deployment_time_s,
+                "landing_velocity_ms": self.landing_velocity_ms,
+                "deployed_below_ground": self.deployed_below_ground,
+            },
+            "states": [
+                {
+                    "time_s": s.time,
+                    "altitude_m": s.altitude,
+                    "velocity_ms": s.velocity,
+                    "acceleration_ms2": s.acceleration,
+                    "mass_kg": s.mass,
+                    "thrust_n": s.thrust,
+                    "drag_n": s.drag,
+                    "phase": s.phase.value,
+                }
+                for s in self.states
+            ],
+        }
+
+    def to_json(self, path: Path | str, indent: int | None = 2) -> None:
+        """Write the result (summary + time-series) to a JSON file."""
+        Path(path).write_text(json.dumps(self.to_dict(), indent=indent))
 
 
 def _recovery_drag_term(rocket: Rocket) -> tuple[float, float]:
@@ -291,6 +368,9 @@ class RocketSimulation:
                 if phase != FlightPhase.LANDED:
                     result.flight_time_s = t
                     result.landing_velocity_ms = abs(velocity)
+                # Lawn dart: ground impact before recovery deployed.
+                if recovery_deploy_t is None and rocket.recovery is not None:
+                    result.deployed_below_ground = True
                 phase = FlightPhase.LANDED
                 result.states.append(
                     SimulationState(

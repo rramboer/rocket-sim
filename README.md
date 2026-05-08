@@ -32,6 +32,11 @@ the same rocket would do on the Moon, Mars, Venus, or Titan.
   configured with its recommended motor and recovery.
 - **`.eng` motor file loader** — drop in any motor from
   [Thrustcurve.org](https://www.thrustcurve.org/).
+- **Pre-launch design validator** flags marginal thrust-to-weight,
+  underpowered configurations, transonic flight, motors that don't fit
+  the body tube, and "lawn dart" timing.
+- **CSV / JSON export** for the trajectory time-series and summary
+  stats — pipe straight into a Jupyter notebook or spreadsheet.
 - **CLI and library** — use `rocket-sim` as a command-line tool or
   `import rocket_sim` from your own scripts.
 
@@ -77,6 +82,9 @@ rocket-sim --kit big-bertha --dashboard -o flight.png
 
 # Use a downloaded thrustcurve.org motor file
 rocket-sim --kit alpha-iii --motor-file ./Estes_C6.eng
+
+# Save the trajectory time-series for analysis
+rocket-sim --kit alpha-iii --csv flight.csv --json flight.json --no-plot
 
 # List available motors and kits
 rocket-sim --list-motors
@@ -129,10 +137,32 @@ result = simulate_rocket(rocket)
 print(result.summary())
 ```
 
+### Validate a design
+
+```python
+from rocket_sim import get_kit, validate_design, format_warnings
+
+rocket = get_kit("alpha-iii")
+warnings = validate_design(rocket)
+print(format_warnings(warnings))
+# → "No design warnings."
+```
+
+### Export the time-series
+
+```python
+from rocket_sim import get_kit, simulate_rocket
+
+result = simulate_rocket(get_kit("alpha-iii"))
+result.to_csv("flight.csv")
+result.to_json("flight.json")
+```
+
 ## Built-in motor presets
 
 | Designation | Total impulse | Burn time | Peak thrust | Delay grain |
 |---|---|---|---|---|
+| 1/2A6-2 | ~1.25 N·s | 0.32 s | ~7 N | 2 s |
 | A8-3 | ~2.5 N·s | 0.5 s | ~13 N | 3 s |
 | B6-4 | ~5.0 N·s | 0.86 s | ~12 N | 4 s |
 | C6-3 | ~10.0 N·s | 1.85 s | ~14 N | 3 s |
@@ -152,7 +182,7 @@ data. For exact certified-motor data, download `.eng` files from
 |---|---|---|---|---|
 | Estes Alpha III | 34 g | 24.7 mm (BT-50) | C6-5 | 12-inch parachute |
 | Estes Big Bertha | 77 g | 41.3 mm (BT-60) | C6-5 | 18-inch parachute |
-| Estes Mosquito | 4.5 g | 13.2 mm (BT-5) | A8-3 | 30 × 2.5 cm streamer |
+| Estes Mosquito | 4.5 g | 13.2 mm (BT-5) | 1/2A6-2 | 30 × 2.5 cm streamer |
 | Estes V-2 | 64 g | 41.3 mm (BT-60) | C6-3 | 12-inch parachute |
 
 ## Built-in celestial bodies
@@ -198,6 +228,7 @@ rocket-sim/
 │   ├── presets.py         # Kit presets
 │   ├── simulation.py      # 3-phase trajectory integrator
 │   ├── config.py          # SimulationConfig
+│   ├── validation.py      # Pre-launch design validator
 │   ├── visualization.py   # Plotter
 │   └── cli.py             # rocket-sim CLI
 ├── tests/

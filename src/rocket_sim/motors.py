@@ -320,6 +320,24 @@ def _make(
 
 
 MOTORS: dict[str, Motor] = {
+    "1/2A6-2": _make(
+        "1/2A6-2",
+        diameter_mm=13.0,
+        length_mm=45.0,
+        propellant_g=1.66,
+        total_g=4.7,
+        delay_s=2.0,
+        # Total impulse ~1.25 N*s, peak ~7 N, burn ~0.32 s
+        curve=(
+            (0.0, 0.0),
+            (0.04, 5.0),
+            (0.08, 7.0),
+            (0.13, 4.0),
+            (0.20, 2.5),
+            (0.32, 1.5),
+            (0.32, 0.0),
+        ),
+    ),
     "A8-3": _make(
         "A8-3",
         diameter_mm=18.0,

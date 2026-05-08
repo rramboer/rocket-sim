@@ -7,9 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pre-launch design validator** (`validate_design`, `DesignWarning`,
+  `format_warnings`) with heuristic checks for marginal thrust-to-weight,
+  predicted apogee, transonic flight, motor-too-big-for-airframe,
+  ballistic descent, and "lawn dart" timing. Runs automatically in the
+  CLI; pass `--no-validate` to skip.
+- **CSV and JSON export** on `SimulationResult` (`.to_csv(path)`,
+  `.to_dict()`, `.to_json(path)`) for downstream notebook / spreadsheet
+  analysis. CLI flags `--csv FILE` and `--json FILE` write the same data.
+- **`1/2A6-2` motor preset** for use with the Mosquito kit and other
+  small rockets — replaces the previous silent fallback to A8-3.
+- CLI exit code `2` when the design validator returns any `error`-level
+  warning, for use in CI / scripts.
+
 ### Planned
 
-- More built-in motor presets (1/2A, 1/4A, mid-power and high-power motors)
+- More built-in motor presets (1/4A and mid-power)
 - Wind / weathercocking (would extend the model from 1-D to 2-D)
 - Multi-stage configurations
 - Stability-margin analysis (CG vs CP)

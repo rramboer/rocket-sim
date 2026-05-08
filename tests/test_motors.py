@@ -124,9 +124,18 @@ class TestMotor:
 class TestMotorPresets:
     def test_all_presets_present(self) -> None:
         names = list_motors()
+        assert "1/2A6-2" in names
         assert "A8-3" in names
         assert "C6-5" in names
         assert "F15-6" in names
+
+    def test_half_a_motor_classifies_correctly(self) -> None:
+        m = get_motor("1/2A6-2")
+        # 1/2A: total impulse 0.625-1.25 N*s.
+        assert 0.5 < m.total_impulse < 1.5
+        assert m.delay_seconds == 2.0
+        # 13mm casing (BT-5).
+        assert abs(m.diameter_m - 0.013) < 1e-3
 
     def test_get_motor_returns_copy(self) -> None:
         a = get_motor("C6-5")

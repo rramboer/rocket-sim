@@ -32,6 +32,7 @@ from rocket_sim.motors import Motor, get_motor, list_motors, load_motor_file
 from rocket_sim.physics import CelestialBody, Physics
 from rocket_sim.presets import get_kit, get_kit_info, list_kits
 from rocket_sim.simulation import simulate_multiple
+from rocket_sim.validation import DesignWarning, format_warnings, validate_design
 from rocket_sim.visualization import PlotOptions, PlotStyle, Plotter
 
 BODIES: dict[str, CelestialBody] = {
@@ -152,6 +153,23 @@ def create_parser() -> argparse.ArgumentParser:
         help="Matplotlib style",
     )
     out_group.add_argument("--dpi", type=int, default=150, help="Plot DPI (default: 150)")
+    out_group.add_argument(
+        "--csv",
+        type=Path,
+        metavar="FILE",
+        help="Write the trajectory time-series to a CSV file",
+    )
+    out_group.add_argument(
+        "--json",
+        type=Path,
+        metavar="FILE",
+        help="Write the result (summary + time-series) to a JSON file",
+    )
+    out_group.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="Skip the pre-launch design validation step",
+    )
 
     # Verbosity.
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity")
@@ -336,21 +354,45 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Launch mass:  {rocket.launch_mass_kg * 1000:.1f} g")
         print()
 
+    # Pre-launch design validation (always runs unless --no-validate);
+    # the validator runs its own simulation, which we reuse below to
+    # avoid double-simulating.
+    design_warnings: list[DesignWarning] = []
+    if not args.no_validate:
+        design_warnings = validate_design(rocket, sim_config)
+        if not args.quiet and design_warnings:
+            print(format_warnings(design_warnings))
+            print()
+
     results = simulate_multiple([rocket], sim_config)
+    result = results[0]
 
     if not args.quiet:
-        print(results[0].summary())
+        print(result.summary())
         print()
+
+    # Time-series exports.
+    if args.csv:
+        result.to_csv(args.csv)
+        if not args.quiet:
+            print(f"Wrote CSV: {args.csv}")
+    if args.json:
+        result.to_json(args.json)
+        if not args.quiet:
+            print(f"Wrote JSON: {args.json}")
 
     # Plot.
     if not args.no_plot or args.output:
         options = PlotOptions(style=PlotStyle(args.style), dpi=args.dpi)
         plotter = Plotter(options)
         if args.dashboard:
-            plotter.plot_dashboard(results[0], filename=args.output, show=not args.no_plot)
+            plotter.plot_dashboard(result, filename=args.output, show=not args.no_plot)
         else:
-            plotter.plot_trajectory(results[0], filename=args.output, show=not args.no_plot)
+            plotter.plot_trajectory(result, filename=args.output, show=not args.no_plot)
 
+    # Exit code reflects the worst severity flagged.
+    if any(w.severity == "error" for w in design_warnings):
+        return 2
     return 0
 
 

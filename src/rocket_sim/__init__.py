@@ -34,6 +34,7 @@ from rocket_sim.simulation import (
     simulate_multiple,
     simulate_rocket,
 )
+from rocket_sim.validation import DesignWarning, format_warnings, validate_design
 from rocket_sim.visualization import PlotOptions, PlotStyle, Plotter
 
 __version__ = "0.1.0"
@@ -70,6 +71,10 @@ __all__ = [
     "get_kit",
     "get_kit_info",
     "list_kits",
+    # Validation
+    "DesignWarning",
+    "validate_design",
+    "format_warnings",
     # Visualisation
     "Plotter",
     "PlotStyle",

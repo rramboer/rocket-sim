@@ -42,7 +42,7 @@ _KIT_SPECS: dict[str, dict[str, object]] = {
     "mosquito": {
         "name": "Estes Mosquito",
         "dry_mass_kg": 0.0045,  # 4.5 g — extremely small
-        "motor": "1/2A6-2",  # Not in the built-in motor presets — we'll fall back below.
+        "motor": "1/2A6-2",
         "diameter_m": 0.0132,  # BT-5 ≈ 13.2 mm
         "drag_coefficient": 0.75,
         "recovery": Streamer(length_m=0.30, width_m=0.025, drag_coefficient=0.5),
@@ -56,20 +56,6 @@ _KIT_SPECS: dict[str, dict[str, object]] = {
         "recovery": Parachute(diameter_m=0.305, drag_coefficient=0.75),
     },
 }
-
-# The Mosquito's stock motor (1/2A6-2) isn't in our built-in motor
-# presets, so substitute the smallest motor we ship (A8-3) and note
-# that in the docstring. Users wanting the exact stock motor can load
-# it from a .eng file.
-_KIT_MOTOR_FALLBACKS: dict[str, str] = {
-    "1/2A6-2": "A8-3",
-}
-
-
-def _resolve_motor(designation: str) -> object:
-    """Return a fresh Motor for a designation, with fallback for unsupported codes."""
-    fallback = _KIT_MOTOR_FALLBACKS.get(designation, designation)
-    return get_motor(fallback)
 
 
 def get_kit(name: str) -> Rocket:
@@ -95,7 +81,7 @@ def get_kit(name: str) -> Rocket:
         available = ", ".join(_KIT_SPECS.keys())
         raise KeyError(f"Unknown kit: {name!r}. Available: {available}")
     spec = _KIT_SPECS[key]
-    motor = _resolve_motor(spec["motor"])  # type: ignore[arg-type]
+    motor = get_motor(spec["motor"])  # type: ignore[arg-type]
     recovery = spec["recovery"]
     if recovery is not None:
         # Recovery is frozen but cheap; still return a fresh copy via replace
@@ -104,7 +90,7 @@ def get_kit(name: str) -> Rocket:
     return Rocket(
         name=spec["name"],  # type: ignore[arg-type]
         dry_mass_kg=spec["dry_mass_kg"],  # type: ignore[arg-type]
-        motor=motor,  # type: ignore[arg-type]
+        motor=motor,
         diameter_m=spec["diameter_m"],  # type: ignore[arg-type]
         drag_coefficient=spec["drag_coefficient"],  # type: ignore[arg-type]
         recovery=recovery,  # type: ignore[arg-type]
