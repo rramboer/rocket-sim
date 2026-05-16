@@ -1,8 +1,19 @@
 """
-Command-line interface for the rocket simulator.
+Command-line interface for `rocket-sim`.
 
-This module provides a rich CLI experience for running rocket simulations
-with various options and output formats.
+Run a hobby-rocket flight simulation from the command line. The CLI
+supports:
+
+- Built-in kit presets (``--kit alpha-iii``).
+- Built-in motor presets (``--motor c6-5``); overrides the kit's default
+  motor when supplied with ``--kit``.
+- User-supplied .eng motor files (``--motor-file motor.eng``).
+- Fully custom rockets (``--dry-mass``, ``--diameter``, ``--cd``,
+  ``--recovery``).
+- Multi-body launches (``--body {earth,moon,mars,venus,titan}``).
+- Recovery-deploy timing (``--deploy-mode {motor-delay,apogee}``).
+
+Default invocation with no rocket flags drops into interactive mode.
 """
 
 from __future__ import annotations
@@ -10,158 +21,165 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import NoReturn
 
 from rocket_sim import __version__
 from rocket_sim.config import SimulationConfig
-from rocket_sim.models import RocketConfig
-from rocket_sim.presets import get_preset, list_presets
+from rocket_sim.models import Parachute, Rocket, Streamer
+from rocket_sim.motors import Motor, get_motor, list_motors, load_motor_file
+from rocket_sim.physics import CelestialBody, Physics
+from rocket_sim.presets import get_kit, get_kit_info, list_kits
 from rocket_sim.simulation import simulate_multiple
+from rocket_sim.validation import DesignWarning, format_warnings, validate_design
 from rocket_sim.visualization import PlotOptions, PlotStyle, Plotter
+
+BODIES: dict[str, CelestialBody] = {
+    "earth": Physics.EARTH,
+    "moon": Physics.MOON,
+    "mars": Physics.MARS,
+    "venus": Physics.VENUS,
+    "titan": Physics.TITAN,
+}
 
 
 def create_parser() -> argparse.ArgumentParser:
-    """Create the argument parser for the CLI."""
+    """Build the argparse parser."""
     parser = argparse.ArgumentParser(
         prog="rocket-sim",
-        description="Simulate rocket trajectories with realistic physics.",
-        epilog="Example: rocket-sim --preset 'Falcon 9' -o trajectory.png",
+        description="Simulate the flight of a hobby model rocket.",
+        epilog="Example: rocket-sim --kit alpha-iii --motor c6-5 --body mars -o flight.png",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+
+    # Mutually-exclusive top-level mode selectors.
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--list-motors", action="store_true", help="List built-in motor presets and exit"
+    )
+    mode.add_argument(
+        "--list-kits", action="store_true", help="List built-in rocket-kit presets and exit"
+    )
+    mode.add_argument("--interactive", action="store_true", help="Run in interactive mode")
+
+    # Rocket selection (kit or custom).
+    rocket_group = parser.add_argument_group("rocket")
+    rocket_group.add_argument(
+        "--kit", type=str, metavar="NAME", help="Use a kit preset (e.g. alpha-iii)"
+    )
+    rocket_group.add_argument(
+        "--dry-mass", type=float, metavar="KG", help="Custom rocket: empty mass (kg)"
+    )
+    rocket_group.add_argument(
+        "--diameter", type=float, metavar="M", help="Custom rocket: airframe diameter (m)"
+    )
+    rocket_group.add_argument(
+        "--cd",
+        type=float,
+        metavar="FLOAT",
+        default=0.75,
+        help="Custom rocket: drag coefficient (default 0.75)",
+    )
+    rocket_group.add_argument(
+        "--recovery",
+        type=str,
+        metavar="SPEC",
+        default="parachute:0.3",
+        help="Recovery system: 'parachute:DIAM_M', 'streamer:LENGTH_MxWIDTH_M', or 'none'",
     )
 
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
-    )
-
-    # Simulation source
-    source_group = parser.add_mutually_exclusive_group()
-    source_group.add_argument(
-        "-p",
-        "--preset",
+    # Motor selection.
+    motor_group = parser.add_argument_group("motor")
+    motor_group.add_argument(
+        "--motor",
         type=str,
         metavar="NAME",
-        help="Use a preset rocket configuration",
+        help="Motor designation (e.g. C6-5). Overrides the kit's default motor.",
     )
-    source_group.add_argument(
-        "--all-presets",
-        action="store_true",
-        help="Simulate all available rocket presets",
-    )
-    source_group.add_argument(
-        "--list-presets",
-        action="store_true",
-        help="List all available rocket presets and exit",
-    )
-    source_group.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Run in interactive mode",
+    motor_group.add_argument(
+        "--motor-file",
+        type=Path,
+        metavar="PATH.eng",
+        help="Path to a .eng motor file",
     )
 
-    # Custom rocket parameters
-    custom_group = parser.add_argument_group("custom rocket")
-    custom_group.add_argument(
-        "-m",
-        "--mass",
-        type=float,
-        metavar="KG",
-        help="Rocket mass in kilograms",
-    )
-    custom_group.add_argument(
-        "-t",
-        "--thrust",
-        type=float,
-        metavar="N",
-        help="Engine thrust in Newtons",
-    )
-    custom_group.add_argument(
-        "-b",
-        "--burn-time",
-        type=float,
-        metavar="SEC",
-        help="Engine burn time in seconds",
-    )
-    custom_group.add_argument(
-        "-n",
-        "--name",
+    # Body and launch site.
+    site_group = parser.add_argument_group("launch site")
+    site_group.add_argument(
+        "--body",
         type=str,
-        default="Custom Rocket",
-        metavar="NAME",
-        help="Name for the custom rocket",
+        choices=list(BODIES.keys()),
+        default="earth",
+        help="Celestial body to launch from (default: earth)",
+    )
+    site_group.add_argument(
+        "--launch-altitude",
+        type=float,
+        metavar="M",
+        default=0.0,
+        help="Launch site elevation above the body's surface (default: 0)",
     )
 
-    # Simulation parameters
-    sim_group = parser.add_argument_group("simulation options")
+    # Simulation parameters.
+    sim_group = parser.add_argument_group("simulation")
     sim_group.add_argument(
-        "--dt",
-        type=float,
-        default=0.1,
-        metavar="SEC",
-        help="Time step for simulation (default: 0.1s)",
+        "--deploy-mode",
+        type=str,
+        choices=("motor-delay", "apogee"),
+        default="motor-delay",
+        help="Recovery deployment timing (default: motor-delay)",
+    )
+    sim_group.add_argument(
+        "--dt", type=float, default=0.05, help="Integration timestep in seconds (default: 0.05)"
     )
     sim_group.add_argument(
         "--max-time",
         type=float,
-        default=1_000_000,
-        metavar="SEC",
-        help="Maximum simulation time (default: 1000000s)",
+        default=600.0,
+        help="Max simulation time in seconds (default: 600)",
     )
 
-    # Output options
-    output_group = parser.add_argument_group("output options")
-    output_group.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        metavar="FILE",
-        help="Save plot to file (e.g., trajectory.png)",
-    )
-    output_group.add_argument(
-        "--no-plot",
-        action="store_true",
-        help="Don't display the plot",
-    )
-    output_group.add_argument(
-        "--dashboard",
-        action="store_true",
-        help="Generate a full dashboard with multiple plots",
-    )
-    output_group.add_argument(
+    # Output.
+    out_group = parser.add_argument_group("output")
+    out_group.add_argument("-o", "--output", type=Path, metavar="FILE", help="Save plot to FILE")
+    out_group.add_argument("--no-plot", action="store_true", help="Do not display the plot window")
+    out_group.add_argument("--dashboard", action="store_true", help="Render multi-panel dashboard")
+    out_group.add_argument(
         "--style",
         type=str,
         choices=[s.value for s in PlotStyle],
         default="seaborn-v0_8-darkgrid",
-        help="Plot style (default: seaborn-v0_8-darkgrid)",
+        help="Matplotlib style",
     )
-    output_group.add_argument(
-        "--dpi",
-        type=int,
-        default=150,
-        help="Output resolution in DPI (default: 150)",
+    out_group.add_argument("--dpi", type=int, default=150, help="Plot DPI (default: 150)")
+    out_group.add_argument(
+        "--csv",
+        type=Path,
+        metavar="FILE",
+        help="Write the trajectory time-series to a CSV file",
+    )
+    out_group.add_argument(
+        "--json",
+        type=Path,
+        metavar="FILE",
+        help="Write the result (summary + time-series) to a JSON file",
+    )
+    out_group.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="Skip the pre-launch design validation step",
     )
 
-    # Verbosity
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="Increase verbosity (-v for info, -vv for debug)",
-    )
-    parser.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        help="Suppress all output except errors",
-    )
+    # Verbosity.
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress non-error output")
 
     return parser
 
 
 def setup_logging(verbose: int, quiet: bool) -> None:
-    """Configure logging based on verbosity."""
+    """Configure root logging based on -v / -q flags."""
     if quiet:
         level = logging.ERROR
     elif verbose >= 2:
@@ -170,213 +188,216 @@ def setup_logging(verbose: int, quiet: bool) -> None:
         level = logging.INFO
     else:
         level = logging.WARNING
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
-    logging.basicConfig(
-        level=level,
-        format="%(levelname)s: %(message)s",
+
+def parse_recovery(spec: str) -> Parachute | Streamer | None:
+    """Parse the ``--recovery`` flag into a Recovery instance."""
+    spec = spec.strip().lower()
+    if spec in ("none", ""):
+        return None
+    if spec.startswith("parachute:"):
+        diam = float(spec.split(":", 1)[1])
+        return Parachute(diameter_m=diam)
+    if spec.startswith("streamer:"):
+        rest = spec.split(":", 1)[1]
+        l_str, w_str = rest.split("x")
+        return Streamer(length_m=float(l_str), width_m=float(w_str))
+    raise ValueError(
+        f"Unknown recovery spec: {spec!r}. Use 'parachute:DIAM_M', 'streamer:LxW', or 'none'."
     )
 
 
-def print_preset_list() -> None:
-    """Print all available presets."""
-    print("\nAvailable Rocket Presets")
+def print_motor_list() -> None:
+    """Print all built-in motor presets."""
+    print("\nBuilt-in motor presets")
     print("=" * 60)
-    for name in list_presets():
-        config = get_preset(name)
-        twr = config.thrust_to_weight_ratio
-        print(f"  {name:20} | Mass: {config.mass:>12,.0f} kg | T/W: {twr:.2f}")
+    for name in list_motors():
+        m = get_motor(name)
+        print(
+            f"  {m.designation:8} | I = {m.total_impulse:5.2f} N·s | "
+            f"burn {m.burn_time:.2f} s | peak {m.peak_thrust:5.1f} N | delay {m.delay_seconds:.0f} s"
+        )
     print()
 
 
-def get_custom_rocket_interactive() -> RocketConfig:
-    """Interactively get rocket configuration from user."""
-    print("\nEnter custom rocket parameters:")
-
-    while True:
-        try:
-            mass = float(input("  Mass (kg): "))
-            thrust = float(input("  Thrust (N): "))
-            burn_time = float(input("  Burn time (s): "))
-            name = input("  Name (optional): ").strip() or "Custom Rocket"
-
-            return RocketConfig(
-                mass=mass,
-                thrust=thrust,
-                burn_time=burn_time,
-                name=name,
-            )
-        except ValueError as e:
-            print(f"Invalid input: {e}")
-            print("Please try again.\n")
+def print_kit_list() -> None:
+    """Print all built-in rocket-kit presets."""
+    print("\nBuilt-in rocket-kit presets")
+    print("=" * 60)
+    for name in list_kits():
+        print(get_kit_info(name))
+        print("-" * 60)
 
 
-def run_interactive_mode() -> list[RocketConfig]:
-    """Run interactive mode to select rockets."""
+def resolve_motor(args: argparse.Namespace, default: Motor | None = None) -> Motor | None:
+    """Resolve the motor from CLI flags. Returns ``None`` only if no source is given."""
+    if args.motor_file:
+        return load_motor_file(args.motor_file)
+    if args.motor:
+        return get_motor(args.motor)
+    return default
+
+
+def build_rocket_from_args(args: argparse.Namespace, body: CelestialBody) -> Rocket:
+    """Build a Rocket from the CLI flags. Combines kit + overrides + custom flags."""
+    if args.kit:
+        rocket = get_kit(args.kit)
+        # Apply overrides on top of the kit.
+        motor: Motor = resolve_motor(args, default=rocket.motor) or rocket.motor
+        recovery = rocket.recovery  # keep kit's recovery unless explicit override below
+        if args.recovery and "--recovery" in sys.argv:
+            recovery = parse_recovery(args.recovery)
+        return replace(rocket, motor=motor, recovery=recovery, body=body)
+
+    # Custom rocket — all four pieces required.
+    if args.dry_mass is None or args.diameter is None:
+        raise SystemExit(
+            "Custom rocket requires --dry-mass and --diameter (and --motor or --motor-file)."
+        )
+    custom_motor = resolve_motor(args)
+    if custom_motor is None:
+        raise SystemExit("Custom rocket requires --motor or --motor-file.")
+    recovery = parse_recovery(args.recovery)
+    return Rocket(
+        name="Custom Rocket",
+        dry_mass_kg=args.dry_mass,
+        motor=custom_motor,
+        diameter_m=args.diameter,
+        drag_coefficient=args.cd,
+        recovery=recovery,
+        body=body,
+    )
+
+
+def run_interactive_mode() -> tuple[Rocket, str]:
+    """Walk the user through kit and body selection. Returns (rocket, body_key)."""
     print("\n" + "=" * 60)
-    print("  ROCKET SIMULATOR - Interactive Mode")
+    print("  rocket-sim — Interactive Mode")
     print("=" * 60)
 
-    print_preset_list()
-
-    print("Options:")
-    print("  [number] - Select a preset by number")
-    print("  [name]   - Select a preset by name")
-    print("  'custom' - Enter custom rocket parameters")
-    print("  'all'    - Simulate all presets")
-    print("  'done'   - Finish selection and run simulation")
-    print()
-
-    configs: list[RocketConfig] = []
-    preset_names = list_presets()
-
+    print_kit_list()
     while True:
-        choice = input("Select rocket (or 'done'): ").strip()
-
-        if choice.lower() == "done":
-            if not configs:
-                print("No rockets selected. Please select at least one.")
-                continue
+        choice = input("Select a kit by name (or 'custom'): ").strip().lower()
+        if choice == "custom":
+            print("\nEnter custom rocket parameters:")
+            dry_mass = float(input("  Dry mass (kg): "))
+            diameter = float(input("  Diameter (m): "))
+            cd = float(input("  Drag coefficient (e.g. 0.75): "))
+            motor_name = input("  Motor designation (e.g. C6-5): ").strip()
+            motor = get_motor(motor_name)
+            chute_diam = float(input("  Parachute diameter in meters (0 for none): "))
+            recovery: Parachute | Streamer | None = (
+                Parachute(diameter_m=chute_diam) if chute_diam > 0 else None
+            )
+            rocket = Rocket(
+                name="Custom Rocket",
+                dry_mass_kg=dry_mass,
+                motor=motor,
+                diameter_m=diameter,
+                drag_coefficient=cd,
+                recovery=recovery,
+            )
             break
-
-        if choice.lower() == "all":
-            configs = [get_preset(name) for name in preset_names]
-            print(f"Selected all {len(configs)} presets.")
+        try:
+            rocket = get_kit(choice)
             break
-
-        if choice.lower() == "custom":
-            config = get_custom_rocket_interactive()
-            configs.append(config)
-            print(f"Added: {config.name}")
-            continue
-
-        # Try as number
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(preset_names):
-                config = get_preset(preset_names[idx])
-                configs.append(config)
-                print(f"Added: {config.name}")
-                continue
-        except ValueError:
-            pass
-
-        # Try as name
-        try:
-            config = get_preset(choice)
-            configs.append(config)
-            print(f"Added: {config.name}")
         except KeyError:
-            print(f"Unknown preset: '{choice}'")
+            print(f"Unknown kit: {choice!r}\n")
 
-    return configs
+    print("\nLaunch from which body?")
+    for key in BODIES:
+        print(f"  - {key}")
+    body_key = input("Body [earth]: ").strip().lower() or "earth"
+    if body_key not in BODIES:
+        print(f"Unknown body {body_key!r}; using Earth.")
+        body_key = "earth"
+    rocket = replace(rocket, body=BODIES[body_key])
+    return rocket, body_key
 
 
 def main(argv: list[str] | None = None) -> int:
-    """
-    Main entry point for the CLI.
-
-    Args:
-        argv: Command-line arguments. Uses sys.argv if None.
-
-    Returns:
-        Exit code (0 for success).
-    """
+    """CLI entry point. Returns an exit code."""
     parser = create_parser()
     args = parser.parse_args(argv)
-
     setup_logging(args.verbose, args.quiet)
 
-    # Handle --list-presets
-    if args.list_presets:
-        print_preset_list()
+    if args.list_motors:
+        print_motor_list()
+        return 0
+    if args.list_kits:
+        print_kit_list()
         return 0
 
-    # Determine rocket configuration(s)
-    configs: list[RocketConfig] = []
-
-    if args.interactive:
-        configs = run_interactive_mode()
-
-    elif args.all_presets:
-        configs = [get_preset(name) for name in list_presets()]
-        if not args.quiet:
-            print(f"Simulating {len(configs)} rocket presets...")
-
-    elif args.preset:
-        try:
-            configs = [get_preset(args.preset)]
-        except KeyError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-
-    elif args.mass and args.thrust and args.burn_time:
-        # Custom rocket from command line
-        try:
-            configs = [
-                RocketConfig(
-                    mass=args.mass,
-                    thrust=args.thrust,
-                    burn_time=args.burn_time,
-                    name=args.name,
-                )
-            ]
-        except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-
+    body = BODIES[args.body]
+    rocket: Rocket
+    if args.interactive or (not args.kit and args.dry_mass is None):
+        rocket, _ = run_interactive_mode()
     else:
-        # Default: run interactive mode
-        configs = run_interactive_mode()
+        try:
+            rocket = build_rocket_from_args(args, body)
+        except (KeyError, ValueError, SystemExit) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
 
-    if not configs:
-        print("No rockets to simulate.", file=sys.stderr)
-        return 1
-
-    # Create simulation config
     sim_config = SimulationConfig(
         dt=args.dt,
         max_time=args.max_time,
+        launch_altitude_m=args.launch_altitude,
+        deploy_mode=args.deploy_mode,
     )
 
-    # Run simulations
     if not args.quiet:
-        print("\nRunning simulations...")
-
-    results = simulate_multiple(configs, sim_config)
-
-    # Print results
-    if not args.quiet:
-        print("\n" + "=" * 60)
-        print("  SIMULATION RESULTS")
-        print("=" * 60)
-        for result in results:
-            print(f"\n{result.summary()}")
+        print()
+        print(f"Simulating: {rocket.name} on {(rocket.body or Physics.EARTH).name}")
+        print(f"  Motor:        {rocket.motor.designation}  ({rocket.motor.total_impulse:.2f} N·s)")
+        print(f"  Launch mass:  {rocket.launch_mass_kg * 1000:.1f} g")
         print()
 
-    # Create plot
+    # Pre-launch design validation (always runs unless --no-validate);
+    # the validator runs its own simulation, which we reuse below to
+    # avoid double-simulating.
+    design_warnings: list[DesignWarning] = []
+    if not args.no_validate:
+        design_warnings = validate_design(rocket, sim_config)
+        if not args.quiet and design_warnings:
+            print(format_warnings(design_warnings))
+            print()
+
+    results = simulate_multiple([rocket], sim_config)
+    result = results[0]
+
+    if not args.quiet:
+        print(result.summary())
+        print()
+
+    # Time-series exports.
+    if args.csv:
+        result.to_csv(args.csv)
+        if not args.quiet:
+            print(f"Wrote CSV: {args.csv}")
+    if args.json:
+        result.to_json(args.json)
+        if not args.quiet:
+            print(f"Wrote JSON: {args.json}")
+
+    # Plot.
     if not args.no_plot or args.output:
-        plot_style = PlotStyle(args.style) if args.style else PlotStyle.SEABORN
-        options = PlotOptions(style=plot_style, dpi=args.dpi)
+        options = PlotOptions(style=PlotStyle(args.style), dpi=args.dpi)
         plotter = Plotter(options)
-
-        if args.dashboard and len(results) == 1:
-            plotter.plot_dashboard(
-                results[0],
-                filename=args.output,
-                show=not args.no_plot,
-            )
+        if args.dashboard:
+            plotter.plot_dashboard(result, filename=args.output, show=not args.no_plot)
         else:
-            plotter.plot_multiple_trajectories(
-                results,
-                filename=args.output,
-                show=not args.no_plot,
-            )
+            plotter.plot_trajectory(result, filename=args.output, show=not args.no_plot)
 
+    # Exit code reflects the worst severity flagged.
+    if any(w.severity == "error" for w in design_warnings):
+        return 2
     return 0
 
 
 def cli_main() -> NoReturn:
-    """Entry point that handles exit codes."""
+    """Entry point that handles process exit."""
     sys.exit(main())
 
 

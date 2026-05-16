@@ -1,341 +1,454 @@
 """
-Core simulation engine for rocket trajectory calculations.
+Three-phase trajectory simulation for hobby rockets.
 
-This module provides the main simulation class that orchestrates the
-physics calculations and tracks simulation state.
+The simulator advances the rocket through three flight phases:
+
+- BOOST: motor is producing thrust. Forces: thrust(t), drag, gravity.
+  Mass decreases as propellant is consumed (constant-Isp model).
+- COAST: motor has burned out, rocket continues upward (or starts
+  falling) until recovery deploys. Forces: drag, gravity.
+- DESCENT: recovery has deployed. Forces: drag (now using the recovery
+  device's much larger Cd·A), gravity. Terminates when altitude reaches
+  ground level.
+
+Apogee is detected as the time of maximum altitude. Recovery deploys
+either at apogee (`SimulationConfig.deploy_mode = "apogee"`) or at the
+motor's ejection time (`burn_time + delay_seconds`, the realistic
+default).
+
+Integration uses symplectic (Euler-Cromer) Euler: velocity updates
+first, then position with the updated velocity. This conserves energy
+better than plain forward Euler and is adequate at the small timesteps
+hobby trajectories require.
 """
 
 from __future__ import annotations
 
+import csv
+import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from enum import Enum
+from pathlib import Path
+from typing import Any
 
 from rocket_sim.config import SimulationConfig
-from rocket_sim.models import Rocket, RocketConfig
+from rocket_sim.models import Parachute, Rocket, Streamer
 from rocket_sim.physics import Physics
-
-if TYPE_CHECKING:
-    from rocket_sim.physics import CelestialBody
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+class FlightPhase(Enum):
+    """Discrete phases of a model-rocket flight."""
+
+    BOOST = "boost"
+    COAST = "coast"
+    DESCENT = "descent"
+    LANDED = "landed"
+
+
+@dataclass(frozen=True)
 class SimulationState:
-    """
-    Represents the state of the simulation at a point in time.
+    """A snapshot of simulation state at a single timestep."""
 
-    Attributes:
-        time: Elapsed time in seconds.
-        altitude: Altitude in meters.
-        velocity: Velocity in m/s.
-        acceleration: Acceleration in m/s^2.
-        is_burning: Whether the engine is firing.
-    """
-
-    time: float
-    altitude: float
-    velocity: float
-    acceleration: float = 0.0
-    is_burning: bool = False
-
-    def to_tuple(self) -> tuple[float, float, float]:
-        """Return (time, altitude, velocity) tuple."""
-        return (self.time, self.altitude, self.velocity)
+    time: float  # seconds since ignition
+    altitude: float  # meters above launch site
+    velocity: float  # m/s, positive = upward
+    acceleration: float  # m/s²
+    mass: float  # kg
+    thrust: float  # N (signed; always >= 0 in this 1-D model)
+    drag: float  # N (signed; always opposing velocity)
+    phase: FlightPhase
 
 
 @dataclass
 class SimulationResult:
     """
-    Complete results from a rocket simulation.
+    Complete results from a single rocket simulation.
 
-    Attributes:
-        rocket_name: Name of the simulated rocket.
-        config: Configuration used for the rocket.
-        states: List of simulation states over time.
-        max_altitude: Maximum altitude reached in meters.
-        max_velocity: Maximum velocity reached in m/s.
-        flight_time: Total flight time in seconds.
-        escaped: Whether the rocket achieved escape velocity.
-        landing_time: Time of landing (if applicable).
+    Most fields are populated by `RocketSimulation.run()`. Time-series
+    accessors (`time_data`, `altitude_data`, `velocity_data`) read from
+    `states`.
     """
 
     rocket_name: str
-    config: RocketConfig
     states: list[SimulationState] = field(default_factory=list)
-    max_altitude: float = 0.0
-    max_velocity: float = 0.0
-    flight_time: float = 0.0
-    escaped: bool = False
-    landing_time: float | None = None
+    apogee_m: float = 0.0
+    apogee_time_s: float = 0.0
+    burnout_altitude_m: float = 0.0
+    burnout_velocity_ms: float = 0.0
+    burnout_time_s: float = 0.0
+    max_velocity_ms: float = 0.0
+    max_acceleration_ms2: float = 0.0
+    flight_time_s: float = 0.0
+    recovery_deployment_time_s: float | None = None
+    landing_velocity_ms: float = 0.0
+    deployed_below_ground: bool = (
+        False  # True if the rocket hit before recovery deployed (lawn dart)
+    )
 
     @property
     def time_data(self) -> list[float]:
-        """Extract time values from states."""
         return [s.time for s in self.states]
 
     @property
     def altitude_data(self) -> list[float]:
-        """Extract altitude values from states."""
         return [s.altitude for s in self.states]
 
     @property
     def velocity_data(self) -> list[float]:
-        """Extract velocity values from states."""
         return [s.velocity for s in self.states]
 
     @property
-    def max_altitude_km(self) -> float:
-        """Maximum altitude in kilometers."""
-        return self.max_altitude / 1000
+    def thrust_data(self) -> list[float]:
+        return [s.thrust for s in self.states]
 
-    def get_state_at_time(self, time: float) -> SimulationState | None:
-        """
-        Get simulation state closest to the specified time.
+    @property
+    def mass_data(self) -> list[float]:
+        return [s.mass for s in self.states]
 
-        Args:
-            time: Time in seconds.
-
-        Returns:
-            SimulationState closest to the specified time, or None if no states.
-        """
-        if not self.states:
-            return None
-
-        return min(self.states, key=lambda s: abs(s.time - time))
+    @property
+    def apogee_km(self) -> float:
+        return self.apogee_m / 1000.0
 
     def summary(self) -> str:
-        """Generate a summary string of the simulation results."""
-        status = "Escaped" if self.escaped else "Landed"
+        """Multi-line text summary suitable for CLI output."""
+        deploy = (
+            f"{self.recovery_deployment_time_s:.2f} s"
+            if self.recovery_deployment_time_s is not None
+            else "did not deploy"
+        )
+        warn = " (LAWN DART)" if self.deployed_below_ground else ""
         return (
             f"Simulation Results: {self.rocket_name}\n"
-            f"  Status:          {status}\n"
-            f"  Max Altitude:    {self.max_altitude_km:,.2f} km\n"
-            f"  Max Velocity:    {self.max_velocity:,.2f} m/s\n"
-            f"  Flight Time:     {self.flight_time:,.2f} s"
+            f"  Apogee:               {self.apogee_m:7.2f} m at t = {self.apogee_time_s:.2f} s\n"
+            f"  Max velocity:         {self.max_velocity_ms:7.2f} m/s\n"
+            f"  Max acceleration:     {self.max_acceleration_ms2:7.2f} m/s² "
+            f"({self.max_acceleration_ms2 / 9.80665:.2f} g)\n"
+            f"  Burnout altitude:     {self.burnout_altitude_m:7.2f} m at t = {self.burnout_time_s:.2f} s\n"
+            f"  Burnout velocity:     {self.burnout_velocity_ms:7.2f} m/s\n"
+            f"  Recovery deployment:  {deploy}{warn}\n"
+            f"  Flight time:          {self.flight_time_s:7.2f} s\n"
+            f"  Landing velocity:     {self.landing_velocity_ms:7.2f} m/s"
         )
+
+    # --- Export helpers ---------------------------------------------------
+
+    _CSV_COLUMNS = (
+        "time_s",
+        "altitude_m",
+        "velocity_ms",
+        "acceleration_ms2",
+        "mass_kg",
+        "thrust_n",
+        "drag_n",
+        "phase",
+    )
+
+    def to_csv(self, path: Path | str) -> None:
+        """
+        Write the time-series of states to a CSV file.
+
+        Columns: time_s, altitude_m, velocity_ms, acceleration_ms2,
+        mass_kg, thrust_n, drag_n, phase. One row per simulation step.
+        """
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(self._CSV_COLUMNS)
+            for s in self.states:
+                writer.writerow(
+                    [
+                        s.time,
+                        s.altitude,
+                        s.velocity,
+                        s.acceleration,
+                        s.mass,
+                        s.thrust,
+                        s.drag,
+                        s.phase.value,
+                    ]
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serialisable dict containing summary stats and the time-series."""
+        return {
+            "rocket_name": self.rocket_name,
+            "summary": {
+                "apogee_m": self.apogee_m,
+                "apogee_time_s": self.apogee_time_s,
+                "burnout_altitude_m": self.burnout_altitude_m,
+                "burnout_velocity_ms": self.burnout_velocity_ms,
+                "burnout_time_s": self.burnout_time_s,
+                "max_velocity_ms": self.max_velocity_ms,
+                "max_acceleration_ms2": self.max_acceleration_ms2,
+                "flight_time_s": self.flight_time_s,
+                "recovery_deployment_time_s": self.recovery_deployment_time_s,
+                "landing_velocity_ms": self.landing_velocity_ms,
+                "deployed_below_ground": self.deployed_below_ground,
+            },
+            "states": [
+                {
+                    "time_s": s.time,
+                    "altitude_m": s.altitude,
+                    "velocity_ms": s.velocity,
+                    "acceleration_ms2": s.acceleration,
+                    "mass_kg": s.mass,
+                    "thrust_n": s.thrust,
+                    "drag_n": s.drag,
+                    "phase": s.phase.value,
+                }
+                for s in self.states
+            ],
+        }
+
+    def to_json(self, path: Path | str, indent: int | None = 2) -> None:
+        """Write the result (summary + time-series) to a JSON file."""
+        Path(path).write_text(json.dumps(self.to_dict(), indent=indent))
+
+
+def _recovery_drag_term(rocket: Rocket) -> tuple[float, float]:
+    """
+    Return ``(Cd, area)`` to use during the descent phase.
+
+    For ballistic descent (no recovery), falls back to the airframe's
+    own drag.
+    """
+    rec = rocket.recovery
+    if isinstance(rec, (Parachute, Streamer)):
+        return rec.drag_coefficient, rec.cross_sectional_area
+    return rocket.drag_coefficient, rocket.cross_sectional_area
 
 
 class RocketSimulation:
     """
-    Rocket launch simulation engine.
-
-    This class runs physics simulations for rocket trajectories,
-    tracking the rocket's altitude, velocity, and other parameters
-    over time.
+    Trajectory simulator for a single hobby rocket.
 
     Example:
-        >>> from rocket_sim import RocketSimulation, get_preset
-        >>> config = get_preset("Falcon 9")
-        >>> sim = RocketSimulation(config)
+        >>> from rocket_sim import RocketSimulation, get_kit
+        >>> rocket = get_kit("alpha-iii")
+        >>> sim = RocketSimulation(rocket)
         >>> result = sim.run()
-        >>> print(f"Max altitude: {result.max_altitude_km:.2f} km")
+        >>> result.apogee_m  # doctest: +SKIP
     """
 
     def __init__(
         self,
-        rocket_config: RocketConfig,
+        rocket: Rocket,
         sim_config: SimulationConfig | None = None,
-        body: CelestialBody | None = None,
     ) -> None:
-        """
-        Initialize the simulation.
-
-        Args:
-            rocket_config: Configuration for the rocket to simulate.
-            sim_config: Simulation parameters. Uses defaults if not provided.
-            body: Celestial body for gravity. Defaults to Earth.
-        """
-        self.rocket_config = rocket_config
-        self.sim_config = sim_config or SimulationConfig()
-        self.body = body or Physics.EARTH
-
-        # Create rocket instance bound to this simulation's body so that
-        # gravity and energy properties stay consistent.
-        self.rocket = Rocket.from_config(rocket_config, body=self.body)
-
-        logger.debug(
-            f"Initialized simulation for {rocket_config.name} "
-            f"(mass={rocket_config.mass}, thrust={rocket_config.thrust})"
-        )
-
-    def reset(self) -> None:
-        """Reset the simulation to initial state."""
-        self.rocket.reset()
-        logger.debug("Simulation reset")
-
-    def step(self, dt: float | None = None) -> SimulationState:
-        """
-        Perform a single simulation step.
-
-        Args:
-            dt: Time step in seconds. Uses config default if not specified.
-
-        Returns:
-            Current simulation state after the step.
-        """
-        if dt is None:
-            dt = self.sim_config.dt
-
-        old_velocity = self.rocket.velocity
-        altitude, velocity = self.rocket.update(dt)
-
-        acceleration = (velocity - old_velocity) / dt
-        is_burning = self.rocket.engine.is_burning(self.rocket.time)
-
-        return SimulationState(
-            time=self.rocket.time,
-            altitude=altitude,
-            velocity=velocity,
-            acceleration=acceleration,
-            is_burning=is_burning,
-        )
+        self.rocket = rocket
+        self.config = sim_config or SimulationConfig()
+        # Resolve body once; default to Earth.
+        self.body = rocket.body if rocket.body is not None else Physics.EARTH
 
     def run(self) -> SimulationResult:
-        """
-        Run the complete simulation.
+        """Run the simulation to completion and return a populated result."""
+        cfg = self.config
+        rocket = self.rocket
+        body = self.body
+        atmosphere = body.atmosphere
+        dt = cfg.dt
 
-        Simulates the rocket from launch until it either lands back
-        on the surface or achieves escape velocity.
+        result = SimulationResult(rocket_name=rocket.name)
 
-        Returns:
-            SimulationResult containing all trajectory data and statistics.
-        """
-        self.reset()
+        # State variables.
+        t = 0.0
+        altitude = cfg.launch_altitude_m
+        velocity = 0.0
+        ground_altitude = cfg.launch_altitude_m
+        phase = FlightPhase.BOOST
+        recovery_deploy_t: float | None = None
 
-        dt = self.sim_config.dt
-        max_time = self.sim_config.max_time
+        ejection_t = rocket.motor.ejection_time()
+        deploy_at_apogee = cfg.deploy_mode == "apogee"
 
-        result = SimulationResult(
-            rocket_name=self.rocket_config.name,
-            config=self.rocket_config,
+        # Body Cd·A (used during BOOST and COAST phases).
+        body_cd_area = rocket.drag_coefficient * rocket.cross_sectional_area
+        # Recovery Cd·A (used during DESCENT).
+        recovery_cd, recovery_area = _recovery_drag_term(rocket)
+        recovery_cd_area = recovery_cd * recovery_area
+
+        # Track the apogee for both result reporting and deploy timing.
+        apogee_alt = altitude
+        apogee_t = 0.0
+
+        # Initial state record.
+        mass0 = rocket.mass_at(0.0)
+        gravity0 = Physics.gravity_at_altitude(altitude - ground_altitude, body)
+        result.states.append(
+            SimulationState(
+                time=0.0,
+                altitude=altitude,
+                velocity=0.0,
+                acceleration=rocket.motor.thrust_at(0.0) / mass0 - gravity0,
+                mass=mass0,
+                thrust=rocket.motor.thrust_at(0.0),
+                drag=0.0,
+                phase=phase,
+            )
         )
 
-        logger.info(f"Starting simulation: {self.rocket_config.name}")
+        prev_velocity = 0.0
+        burnout_recorded = False
 
-        # Initial state
-        initial_state = SimulationState(
-            time=0.0,
-            altitude=0.0,
-            velocity=0.0,
-            acceleration=0.0,
-            is_burning=True,
-        )
-        result.states.append(initial_state)
+        while t < cfg.max_time:
+            # Compute forces at current state.
+            mass = rocket.mass_at(t)
+            thrust = rocket.motor.thrust_at(t) if phase == FlightPhase.BOOST else 0.0
 
-        while self.rocket.time <= max_time:
-            state = self.step(dt)
-            result.states.append(state)
+            altitude_above_surface = altitude - ground_altitude
+            gravity = Physics.gravity_at_altitude(altitude_above_surface, body)
 
-            # Track maximums
-            if state.altitude > result.max_altitude:
-                result.max_altitude = state.altitude
-            if abs(state.velocity) > result.max_velocity:
-                result.max_velocity = abs(state.velocity)
+            # Drag opposes velocity. We treat the quadratic drag term
+            # semi-implicitly so the integrator stays stable when a
+            # parachute deploys at high speed (otherwise explicit Euler
+            # would let drag flip the sign of velocity in one step).
+            air_density = atmosphere.density_at(altitude_above_surface) if atmosphere else 0.0
+            cd_area = recovery_cd_area if phase == FlightPhase.DESCENT else body_cd_area
+            drag_coeff = 0.5 * air_density * cd_area  # multiplies |v|·v
+            # Drag force used only for reporting (computed from pre-step velocity).
+            drag = -drag_coeff * velocity * abs(velocity)
 
-            # Check for landing
-            if self.rocket.is_on_ground and self.rocket.time > dt:
-                result.landing_time = self.rocket.time
-                result.flight_time = self.rocket.time
-                logger.info(f"Rocket landed at t={self.rocket.time:.2f}s")
+            other_force = thrust - mass * gravity
+            # Semi-implicit update: v_{n+1} = (v_n + dt·a_other) / (1 + dt·drag_coeff·|v_n|/m)
+            damping = 1.0 + dt * drag_coeff * abs(velocity) / mass
+            prev_velocity = velocity
+            velocity = (velocity + dt * other_force / mass) / damping
+            altitude += velocity * dt
+            t += dt
+            acceleration = (velocity - prev_velocity) / dt if dt > 0 else 0.0
+
+            # Ground constraint. The rocket cannot pass through the ground.
+            landed_this_step = False
+            if altitude < ground_altitude:
+                altitude = ground_altitude
+                if phase == FlightPhase.BOOST and prev_velocity <= 0 and velocity <= 0:
+                    # Still on the pad — thrust has not yet overcome weight.
+                    # Hold the rocket stationary; the launch tower would do
+                    # this in real life.
+                    velocity = 0.0
+                else:
+                    # In flight and now hitting the ground.
+                    landed_this_step = True
+
+            # Phase transitions.
+            if phase == FlightPhase.BOOST and t >= rocket.motor.burn_time:
+                phase = FlightPhase.COAST
+                if not burnout_recorded:
+                    result.burnout_altitude_m = altitude
+                    result.burnout_velocity_ms = velocity
+                    result.burnout_time_s = t
+                    burnout_recorded = True
+
+            # Track apogee (max altitude reached).
+            if altitude > apogee_alt:
+                apogee_alt = altitude
+                apogee_t = t
+
+            # Recovery deployment.
+            if phase != FlightPhase.DESCENT and recovery_deploy_t is None:
+                deploy_now = False
+                if deploy_at_apogee:
+                    # Detect velocity sign change: positive → non-positive at this step.
+                    if prev_velocity > 0 >= velocity:
+                        deploy_now = True
+                else:
+                    if t >= ejection_t:
+                        deploy_now = True
+
+                if deploy_now:
+                    phase = FlightPhase.DESCENT
+                    recovery_deploy_t = t
+                    if altitude <= ground_altitude:
+                        result.deployed_below_ground = True
+
+            if landed_this_step:
+                if phase != FlightPhase.LANDED:
+                    result.flight_time_s = t
+                    result.landing_velocity_ms = abs(velocity)
+                # Lawn dart: ground impact before recovery deployed.
+                if recovery_deploy_t is None and rocket.recovery is not None:
+                    result.deployed_below_ground = True
+                phase = FlightPhase.LANDED
+                result.states.append(
+                    SimulationState(
+                        time=t,
+                        altitude=altitude,
+                        velocity=0.0,
+                        acceleration=0.0,
+                        mass=mass,
+                        thrust=0.0,
+                        drag=0.0,
+                        phase=phase,
+                    )
+                )
                 break
 
-            # Check for escape velocity
-            if self.sim_config.detect_escape:
-                escape_vel = Physics.escape_velocity(state.altitude, self.body)
-                if state.velocity > escape_vel > 0:
-                    result.escaped = True
-                    result.flight_time = self.rocket.time
-                    logger.info(
-                        f"Escape velocity achieved at t={self.rocket.time:.2f}s, "
-                        f"alt={state.altitude / 1000:.2f}km"
-                    )
-                    break
+            # Track maxima.
+            speed = abs(velocity)
+            if speed > result.max_velocity_ms:
+                result.max_velocity_ms = speed
+            abs_accel = abs(acceleration)
+            if abs_accel > result.max_acceleration_ms2:
+                result.max_acceleration_ms2 = abs_accel
 
-        if result.flight_time == 0:
-            result.flight_time = self.rocket.time
+            result.states.append(
+                SimulationState(
+                    time=t,
+                    altitude=altitude,
+                    velocity=velocity,
+                    acceleration=acceleration,
+                    mass=mass,
+                    thrust=thrust,
+                    drag=drag,
+                    phase=phase,
+                )
+            )
+        else:
+            # Simulation hit max_time without landing.
+            logger.warning(
+                "Simulation reached max_time=%s without landing for %r",
+                cfg.max_time,
+                rocket.name,
+            )
+            result.flight_time_s = t
 
-        logger.info(
-            f"Simulation complete: max_alt={result.max_altitude_km:.2f}km, "
-            f"flight_time={result.flight_time:.2f}s"
-        )
+        result.apogee_m = apogee_alt - ground_altitude  # report apogee above launch site
+        result.apogee_time_s = apogee_t
+        result.recovery_deployment_time_s = recovery_deploy_t
+        if not burnout_recorded:
+            # Motor burned out before the integrator stepped past it; reconstruct.
+            result.burnout_time_s = rocket.motor.burn_time
+            result.burnout_altitude_m = (
+                result.states[-1].altitude if result.states else cfg.launch_altitude_m
+            )
+            result.burnout_velocity_ms = result.states[-1].velocity if result.states else 0.0
 
         return result
 
     def run_generator(self) -> Iterator[SimulationState]:
         """
-        Run simulation as a generator, yielding states.
+        Run the simulation as a generator yielding states, for live plotting.
 
-        This is useful for real-time visualization or progress tracking.
-
-        Yields:
-            SimulationState for each time step.
+        Convenience: this just runs `run()` and yields its `states`.
         """
-        self.reset()
-
-        dt = self.sim_config.dt
-        max_time = self.sim_config.max_time
-
-        # Yield initial state
-        yield SimulationState(
-            time=0.0,
-            altitude=0.0,
-            velocity=0.0,
-            acceleration=0.0,
-            is_burning=True,
-        )
-
-        while self.rocket.time <= max_time:
-            state = self.step(dt)
-            yield state
-
-            # Check for landing
-            if self.rocket.is_on_ground and self.rocket.time > dt:
-                break
-
-            # Check for escape velocity
-            if self.sim_config.detect_escape:
-                escape_vel = Physics.escape_velocity(state.altitude, self.body)
-                if state.velocity > escape_vel > 0:
-                    break
+        result = self.run()
+        yield from result.states
 
 
 def simulate_rocket(
-    config: RocketConfig,
+    rocket: Rocket,
     sim_config: SimulationConfig | None = None,
-    body: CelestialBody | None = None,
 ) -> SimulationResult:
-    """
-    Convenience function to run a single rocket simulation.
-
-    Args:
-        config: Rocket configuration.
-        sim_config: Optional simulation configuration.
-        body: Celestial body for gravity. Defaults to Earth.
-
-    Returns:
-        SimulationResult with trajectory data.
-    """
-    sim = RocketSimulation(config, sim_config, body=body)
-    return sim.run()
+    """Convenience: run a single rocket simulation."""
+    return RocketSimulation(rocket, sim_config).run()
 
 
 def simulate_multiple(
-    configs: list[RocketConfig],
+    rockets: list[Rocket],
     sim_config: SimulationConfig | None = None,
-    body: CelestialBody | None = None,
 ) -> list[SimulationResult]:
-    """
-    Simulate multiple rockets.
-
-    Args:
-        configs: List of rocket configurations.
-        sim_config: Optional simulation configuration (shared).
-        body: Celestial body for gravity (shared). Defaults to Earth.
-
-    Returns:
-        List of SimulationResult objects.
-    """
-    return [simulate_rocket(config, sim_config, body=body) for config in configs]
+    """Convenience: run several simulations sequentially."""
+    return [simulate_rocket(rocket, sim_config) for rocket in rockets]

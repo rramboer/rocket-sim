@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "rocket-sim"
 version = "0.1.0"
-description = "A physics-based rocket trajectory simulation library"
+description = "Hobby/model-rocket flight simulator with multi-body support"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -14,10 +14,12 @@ authors = [
 ]
 keywords = [
     "rocket",
+    "model-rocket",
+    "hobby",
+    "estes",
+    "thrustcurve",
     "simulation",
     "physics",
-    "trajectory",
-    "aerospace",
     "education",
 ]
 classifiers = [

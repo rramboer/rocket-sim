@@ -127,18 +127,20 @@ mypy src
 
 ```
 rocket-sim/
-├── src/rocket_sim/     # Main package
-│   ├── __init__.py     # Package exports
-│   ├── physics.py      # Physics calculations
-│   ├── models.py       # Data models
-│   ├── simulation.py   # Simulation engine
-│   ├── visualization.py # Plotting
-│   ├── presets.py      # Rocket presets
-│   ├── config.py       # Configuration
-│   └── cli.py          # CLI interface
-├── tests/              # Test suite
-├── docs/               # Documentation
-└── examples/           # Example scripts
+├── src/rocket_sim/      # Main package
+│   ├── __init__.py      # Public exports
+│   ├── physics.py       # Atmosphere, CelestialBody, Physics
+│   ├── motors.py        # Motor type, .eng loader, motor presets
+│   ├── models.py        # Rocket, Parachute, Streamer
+│   ├── presets.py       # Rocket-kit presets
+│   ├── simulation.py    # 3-phase trajectory integrator
+│   ├── config.py        # SimulationConfig
+│   ├── validation.py    # Pre-launch design validator
+│   ├── visualization.py # Plotter
+│   └── cli.py           # rocket-sim CLI
+├── tests/               # Test suite
+├── docs/                # Documentation
+└── examples/            # Example scripts
 ```
 
 ## Writing Tests
@@ -193,22 +195,61 @@ def gravity_at_altitude(altitude: float) -> float:
     """
 ```
 
-## Adding New Rocket Presets
+## Adding a Motor Preset
 
-To add a new rocket preset:
+To add a new built-in motor:
 
-1. Find reliable specifications (mass, thrust, burn time)
-2. Add to `src/rocket_sim/presets.py`:
+1. Find reliable published data (total impulse, burn time, propellant
+   mass, total mass, delay grain) — e.g. from the manufacturer's catalog
+   or [Thrustcurve.org](https://www.thrustcurve.org/).
+2. Add an entry to `MOTORS` in `src/rocket_sim/motors.py` using the
+   `_make` helper. The thrust curve is a tuple of `(time_s, thrust_N)`
+   samples — a simplified ~5–7 point approximation is acceptable as long
+   as its trapezoidal total impulse lands in the correct NAR class:
    ```python
-   "New Rocket": RocketConfig(
-       name="New Rocket",
-       mass=1000000,      # kg
-       thrust=10000000,   # N
-       burn_time=180,     # s
+   "D12-5": _make(
+       "D12-5",
+       diameter_mm=24.0,
+       length_mm=70.0,
+       propellant_g=16.84,
+       total_g=42.5,
+       delay_s=5.0,
+       curve=(
+           (0.0, 0.0),
+           (0.20, 30.0),   # peak
+           (0.50, 9.0),    # sustain
+           (1.60, 7.0),
+           (1.60, 0.0),    # cut-off
+       ),
    ),
    ```
-3. Add a test in `tests/test_presets.py`
-4. Update the README table
+3. Add a test in `tests/test_motors.py` asserting the motor's total
+   impulse falls within its NAR letter class.
+4. Update the motor table in `README.md`.
+
+Alternatively, users can load any motor at runtime from a `.eng` file
+via `load_motor_file(path)` — only add a built-in preset for commonly
+used motors.
+
+## Adding a Rocket-Kit Preset
+
+To add a new kit:
+
+1. Find published kit specs (dry mass, body-tube diameter, recommended
+   motor, stock recovery device).
+2. Add an entry to `_KIT_SPECS` in `src/rocket_sim/presets.py`:
+   ```python
+   "patriot": {
+       "name": "Estes Patriot",
+       "dry_mass_kg": 0.060,
+       "motor": "C6-5",                  # must exist in MOTORS
+       "diameter_m": 0.033,
+       "drag_coefficient": 0.75,
+       "recovery": Parachute(diameter_m=0.305),
+   },
+   ```
+3. Add a test in `tests/test_presets.py` for structure and lookup.
+4. Update the kit table in `README.md`.
 
 ## Questions?
 

@@ -1,130 +1,102 @@
-"""
-Tests for physics calculations.
-"""
+"""Tests for gravitational helpers and built-in celestial bodies."""
+
+from __future__ import annotations
 
 import math
 
 import pytest
 
-from rocket_sim.physics import Physics
+from rocket_sim.physics import Atmosphere, CelestialBody, Physics
 
 
-class TestGravityAtAltitude:
-    """Tests for gravity_at_altitude function."""
-
-    def test_surface_gravity(self) -> None:
-        """Test gravity at Earth's surface."""
+class TestGravity:
+    def test_surface_gravity_earth(self) -> None:
         g = Physics.gravity_at_altitude(0)
-        # Should be approximately 9.81 m/s^2
+        # GM/R^2 with our constants comes out to ~9.82
         assert 9.7 < g < 9.9
 
     def test_gravity_decreases_with_altitude(self) -> None:
-        """Test that gravity decreases with altitude."""
-        g_surface = Physics.gravity_at_altitude(0)
-        g_100km = Physics.gravity_at_altitude(100_000)
-        g_400km = Physics.gravity_at_altitude(400_000)
+        g0 = Physics.gravity_at_altitude(0)
+        g1 = Physics.gravity_at_altitude(400_000)  # ~ISS
+        assert g1 < g0
+        assert 8.5 < g1 < 8.8
 
-        assert g_surface > g_100km > g_400km
+    def test_gravity_negative_altitude_raises(self) -> None:
+        with pytest.raises(ValueError):
+            Physics.gravity_at_altitude(-1)
 
-    def test_iss_orbit_gravity(self) -> None:
-        """Test gravity at ISS orbit altitude (~400km)."""
-        g = Physics.gravity_at_altitude(400_000)
-        # Should be approximately 8.7 m/s^2
-        assert 8.6 < g < 8.8
+    def test_gravity_on_moon(self) -> None:
+        g = Physics.gravity_at_altitude(0, Physics.MOON)
+        assert 1.5 < g < 1.7
 
-    def test_negative_altitude_raises_error(self) -> None:
-        """Test that negative altitude raises ValueError."""
-        with pytest.raises(ValueError, match="cannot be negative"):
-            Physics.gravity_at_altitude(-100)
-
-    def test_custom_body(self) -> None:
-        """Test gravity calculation with custom celestial body."""
-        g_earth = Physics.gravity_at_altitude(0, Physics.EARTH)
-        g_moon = Physics.gravity_at_altitude(0, Physics.MOON)
-
-        # Moon surface gravity is about 1/6 of Earth's
-        assert g_moon < g_earth
-        assert 1.5 < g_moon < 1.7
+    def test_gravity_on_mars(self) -> None:
+        g = Physics.gravity_at_altitude(0, Physics.MARS)
+        assert 3.6 < g < 3.8
 
 
-class TestEscapeVelocity:
-    """Tests for escape_velocity function."""
-
-    def test_surface_escape_velocity(self) -> None:
-        """Test escape velocity at Earth's surface."""
+class TestEscapeAndOrbital:
+    def test_escape_velocity_earth_surface(self) -> None:
         v = Physics.escape_velocity(0)
-        # Should be approximately 11.2 km/s
-        assert 11_000 < v < 11_300
+        assert 11_180 < v < 11_200  # ~11.186 km/s
 
-    def test_escape_velocity_decreases_with_altitude(self) -> None:
-        """Test that escape velocity decreases with altitude."""
-        v_surface = Physics.escape_velocity(0)
-        v_400km = Physics.escape_velocity(400_000)
-
-        assert v_surface > v_400km
-
-    def test_negative_altitude_raises_error(self) -> None:
-        """Test that negative altitude raises ValueError."""
-        with pytest.raises(ValueError, match="cannot be negative"):
-            Physics.escape_velocity(-100)
-
-
-class TestOrbitalVelocity:
-    """Tests for orbital_velocity function."""
-
-    def test_iss_orbital_velocity(self) -> None:
-        """Test orbital velocity at ISS altitude."""
+    def test_orbital_velocity_iss(self) -> None:
         v = Physics.orbital_velocity(400_000)
-        # ISS orbital velocity is approximately 7.66 km/s
-        assert 7_600 < v < 7_700
+        assert 7_650 < v < 7_700  # ~7672 m/s
 
-    def test_orbital_velocity_relationship(self) -> None:
-        """Test that escape velocity = sqrt(2) * orbital velocity."""
-        altitude = 400_000
-        v_orbital = Physics.orbital_velocity(altitude)
-        v_escape = Physics.escape_velocity(altitude)
-
-        ratio = v_escape / v_orbital
-        assert abs(ratio - math.sqrt(2)) < 0.01
-
-
-class TestAtmosphericDensity:
-    """Tests for atmospheric_density function."""
-
-    def test_sea_level_density(self) -> None:
-        """Test atmospheric density at sea level."""
-        rho = Physics.atmospheric_density(0)
-        assert abs(rho - 1.225) < 0.01
-
-    def test_density_decreases_exponentially(self) -> None:
-        """Test that density decreases with altitude."""
-        rho_0 = Physics.atmospheric_density(0)
-        rho_10km = Physics.atmospheric_density(10_000)
-        rho_30km = Physics.atmospheric_density(30_000)
-
-        assert rho_0 > rho_10km > rho_30km
-
-    def test_above_karman_line(self) -> None:
-        """Test that density is zero above Karman line."""
-        rho = Physics.atmospheric_density(110_000)
-        assert rho == 0.0
-
-    def test_negative_altitude_raises_error(self) -> None:
-        """Test that negative altitude raises ValueError."""
-        with pytest.raises(ValueError, match="cannot be negative"):
-            Physics.atmospheric_density(-100)
+    def test_escape_is_sqrt2_times_orbital(self) -> None:
+        for h in (0, 100_000, 400_000):
+            v_esc = Physics.escape_velocity(h)
+            v_orb = Physics.orbital_velocity(h)
+            assert math.isclose(v_esc, math.sqrt(2) * v_orb, rel_tol=1e-6)
 
 
 class TestCelestialBody:
-    """Tests for CelestialBody dataclass."""
+    def test_surface_gravity_property(self) -> None:
+        assert math.isclose(Physics.EARTH.surface_gravity, Physics.gravity_at_altitude(0))
 
-    def test_surface_gravity(self) -> None:
-        """Test surface gravity calculation."""
-        g = Physics.EARTH.surface_gravity
-        assert 9.7 < g < 9.9
+    def test_negative_mass_raises(self) -> None:
+        with pytest.raises(ValueError):
+            CelestialBody(name="Bad", mass=-1, radius=1)
 
-    def test_moon_properties(self) -> None:
-        """Test Moon celestial body properties."""
-        assert Physics.MOON.name == "Moon"
-        assert Physics.MOON.mass > 0
-        assert Physics.MOON.radius > 0
+    def test_negative_radius_raises(self) -> None:
+        with pytest.raises(ValueError):
+            CelestialBody(name="Bad", mass=1, radius=-1)
+
+    def test_all_builtin_bodies_present(self) -> None:
+        assert Physics.EARTH.atmosphere is not None
+        assert Physics.MOON.atmosphere is None  # vacuum
+        assert Physics.MARS.atmosphere is not None
+        assert Physics.VENUS.atmosphere is not None
+        assert Physics.TITAN.atmosphere is not None
+
+
+class TestAtmosphere:
+    def test_earth_surface_density(self) -> None:
+        atm = Atmosphere.earth()
+        assert math.isclose(atm.density_at(0), 1.225, rel_tol=1e-3)
+
+    def test_density_falls_off_at_scale_height(self) -> None:
+        atm = Atmosphere.earth()
+        assert math.isclose(
+            atm.density_at(atm.scale_height), atm.surface_density / math.e, rel_tol=1e-6
+        )
+
+    def test_negative_altitude_returns_surface(self) -> None:
+        atm = Atmosphere.earth()
+        # Defensive: density_at should not blow up on a tiny negative number
+        assert atm.density_at(-0.01) == atm.surface_density
+
+    def test_mars_thinner_than_earth(self) -> None:
+        assert Atmosphere.mars().surface_density < Atmosphere.earth().surface_density / 50
+
+    def test_venus_thicker_than_earth(self) -> None:
+        assert Atmosphere.venus().surface_density > Atmosphere.earth().surface_density * 50
+
+    def test_titan_thicker_than_earth(self) -> None:
+        assert Atmosphere.titan().surface_density > Atmosphere.earth().surface_density
+
+    def test_invalid_atmosphere_raises(self) -> None:
+        with pytest.raises(ValueError):
+            Atmosphere(surface_density=-1, scale_height=1)
+        with pytest.raises(ValueError):
+            Atmosphere(surface_density=1, scale_height=0)
